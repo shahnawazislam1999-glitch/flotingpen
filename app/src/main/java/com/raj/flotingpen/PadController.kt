@@ -2,6 +2,10 @@ package com.raj.flotingpen
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -15,21 +19,22 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
+import android.widget.Toast
 import kotlin.math.abs
 
 /**
- * Owns the overlay window and decides, moment by moment, whether it catches touches.
+ * Owns the overlay window.
  *
- * Touch routing (Smart pen mode):
- *  - Pen idle   -> window is NOT_TOUCHABLE: fingers scroll / tap the apps underneath as normal.
- *  - Pen active -> (hover, touch, or within the gesture window after the pen leaves) the window
- *                  becomes touchable, the pen writes and fingers turn into gesture tools.
- * Finger mode and Compatibility mode keep the window touchable all the time.
+ * Pen capture mode (default, Android 14+): the window is NEVER touchable, so fingers always reach the
+ * apps. The pen's events are delivered to the service by the system and drawn here.
+ *
+ * Window mode (fallback, always used on Android 13 and older): the window catches touches, the pen
+ * writes, and finger taps / swipes are re-played onto the app underneath.
  */
-class PadController(private val service: AccessibilityService) {
+class PadController(private val service: FloatingPenService) {
 
     private val prefs: SharedPreferences = Prefs.get(service)
-    private val wm = service.getSystemService(android.content.Context.WINDOW_SERVICE) as WindowManager
+    private val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val density = service.resources.displayMetrics.density
     private val vibrator: Vibrator? = service.getSystemService(Vibrator::class.java)
@@ -38,55 +43,30 @@ class PadController(private val service: AccessibilityService) {
     private var params: WindowManager.LayoutParams? = null
     private var touchableNow = false
     private var replaying = false
-    private var sessionUntil = 0L
-    private var expireScheduled = false
     private var lastKeyAt = 0L
+    private var screenOffRegistered = false
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == Prefs.PAD_ON) applyPad() else updateTouchable()
-    }
-
-    private val expire = object : Runnable {
-        override fun run() {
-            expireScheduled = false
-            val remaining = sessionUntil - SystemClock.uptimeMillis()
-            if (remaining > 0L || view?.busy == true) {
-                expireScheduled = true
-                main.postDelayed(this, max(remaining, 400L) + 30L)
-            } else {
-                updateTouchable()
-            }
+        when (key) {
+            Prefs.PAD_ON -> applyPad()
+            Prefs.WINDOW_MODE -> applyMode()
         }
     }
 
-    private fun max(a: Long, b: Long) = if (a > b) a else b
+    /** Power button / screen off: switch the writing pad off (can be disabled in the app). */
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (padOn() && prefs.getBoolean(Prefs.OFF_ON_SCREEN_OFF, true)) PadNotifier.turnOff(service)
+        }
+    }
 
-    // ====================================================================================
-    //  settings (read live, so the settings screen takes effect immediately)
-    // ====================================================================================
+    // ---------------------------------------------------------------- settings (read live)
 
     fun padOn() = prefs.getBoolean(Prefs.PAD_ON, false)
-    fun fingerMode() = prefs.getBoolean(Prefs.FINGER_MODE, false)
-    fun penType() = prefs.getInt(Prefs.PEN_TYPE, PEN_NIRMAL)
     fun sizePx() = prefs.getFloat(Prefs.SIZE_DP, 3f) * density
-    fun annotOn() = prefs.getBoolean(Prefs.ANNOT, false)
-    private fun sessionMs() = prefs.getInt(Prefs.SESSION_S, 4) * 1000L
-
-    /** Compatibility mode: always catch touches and replay finger gestures to the app below. */
-    fun compat(): Boolean =
-        if (prefs.contains(Prefs.COMPAT)) prefs.getBoolean(Prefs.COMPAT, true) else Build.VERSION.SDK_INT < 34
-
     fun color(): Int = if (prefs.getInt(Prefs.COLOR, Prefs.RED) == Prefs.BLUE) Prefs.BLUE else Prefs.RED
-
-    fun flipColor() {
-        prefs.edit().putInt(Prefs.COLOR, if (color() == Prefs.RED) Prefs.BLUE else Prefs.RED).apply()
-        vibrate(18)
-    }
-
-    fun toggleAnnot() {
-        prefs.edit().putBoolean(Prefs.ANNOT, !annotOn()).apply()
-        vibrate(if (annotOn()) 40L else 25L)
-    }
+    fun windowMode(): Boolean =
+        if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
 
     fun vibrate(ms: Long) {
         val v = vibrator ?: return
@@ -96,57 +76,85 @@ class PadController(private val service: AccessibilityService) {
         }
     }
 
-    // ====================================================================================
-    //  lifecycle
-    // ====================================================================================
+    // ---------------------------------------------------------------- lifecycle
 
     fun start() {
         prefs.registerOnSharedPreferenceChangeListener(prefListener)
+        try {
+            service.registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
+            screenOffRegistered = true
+        } catch (_: Throwable) {
+        }
         applyPad()
     }
 
     fun stop() {
         prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
+        if (screenOffRegistered) {
+            try {
+                service.unregisterReceiver(screenOff)
+            } catch (_: Throwable) {
+            }
+            screenOffRegistered = false
+        }
         main.removeCallbacksAndMessages(null)
         hide()
+        PadNotifier.cancel(service)
     }
 
     private fun applyPad() {
-        if (padOn()) show() else hide()
+        if (padOn()) {
+            show()
+            if (view != null) PadNotifier.show(service)
+        } else {
+            hide()
+            PadNotifier.cancel(service)
+        }
+    }
+
+    /** Pen capture (Android 14+) is on only while the pad is shown and window mode is off. */
+    private fun applyMode() {
+        service.setPenCapture(view != null && !windowMode())
+        updateTouchable()
+        view?.flash(if (windowMode()) "Window mode" else "Pen capture mode")
     }
 
     private fun show() {
         if (view != null) return
         val v = InkView(service, this)
+        val touchable = wantTouchable()
+        var flags = BASE_FLAGS
+        if (!touchable) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            BASE_FLAGS,
+            flags,
             PixelFormat.TRANSLUCENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
-        val touchable = wantTouchable()
-        if (!touchable) lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         try {
             wm.addView(v, lp)
         } catch (e: Throwable) {
+            Toast.makeText(service, "Pen layer could not start: " + e.message, Toast.LENGTH_LONG).show()
             return
         }
         view = v
         params = lp
         touchableNow = touchable
+        service.setPenCapture(!windowMode())
+        v.flash(if (windowMode()) "Pen layer on (window mode)" else "Pen layer on - write with the pen", 3000L)
     }
 
     private fun hide() {
+        service.setPenCapture(false)
         val v = view ?: return
         view = null
         params = null
         touchableNow = false
-        sessionUntil = 0L
         v.release()
         try {
             wm.removeView(v)
@@ -154,28 +162,15 @@ class PadController(private val service: AccessibilityService) {
         }
     }
 
-    // ====================================================================================
-    //  touch routing
-    // ====================================================================================
-
-    fun isCapturing() = touchableNow
-
-    fun sessionActive(): Boolean = SystemClock.uptimeMillis() < sessionUntil || view?.busy == true
-
-    private fun wantTouchable(): Boolean {
-        if (replaying) return false
-        return fingerMode() || compat() || sessionActive()
+    fun clearInk() {
+        view?.clearInk()
+        vibrate(25)
     }
 
-    /** Called on every pen event / finger gesture: keeps the "gesture ready" window open. */
-    fun markActivity() {
-        sessionUntil = SystemClock.uptimeMillis() + sessionMs()
-        if (!touchableNow) updateTouchable()
-        if (!expireScheduled) {
-            expireScheduled = true
-            main.postDelayed(expire, sessionMs() + 30L)
-        }
-    }
+    // ---------------------------------------------------------------- touch routing
+
+    /** Pen capture mode: never touchable. Window mode: always touchable (except while replaying a finger). */
+    private fun wantTouchable(): Boolean = windowMode() && !replaying
 
     private fun updateTouchable() {
         val v = view ?: return
@@ -194,48 +189,33 @@ class PadController(private val service: AccessibilityService) {
         }
     }
 
-    // ====================================================================================
-    //  input from the accessibility service
-    // ====================================================================================
+    // ---------------------------------------------------------------- input from the service
 
-    /** Stylus events observed system-wide (Android 14+). */
-    fun onObservedMotion(e: MotionEvent) {
+    /** Pen events delivered by the system (Android 14+, pen capture mode). */
+    fun onPenMotion(e: MotionEvent) {
         val v = view ?: return
-        if (!padOn()) return
-        when (e.actionMasked) {
-            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> markActivity()
-            MotionEvent.ACTION_HOVER_EXIT -> {}
-            else -> v.observedStylus(e)
-        }
+        if (!padOn() || windowMode()) return
+        v.onPenCaptured(e)
     }
 
-    /**
-     * Xiaomi smart pen side buttons arrive as keyboard keys:
-     *   lower button  (Page Down / Down / Right) -> lasso erase
-     *   upper button  (Page Up / Up / Left)      -> slide the canvas back to normal
-     */
+    /** Xiaomi smart pen side buttons arrive as Page Up / Page Down keys: either one clears the ink. */
     fun onKey(e: KeyEvent): Boolean {
-        val v = view ?: return false
-        if (!padOn()) return false
+        if (view == null || !padOn()) return false
         val c = e.keyCode
-        val up = c == KeyEvent.KEYCODE_PAGE_UP || c == KeyEvent.KEYCODE_DPAD_UP || c == KeyEvent.KEYCODE_DPAD_LEFT
-        val down = c == KeyEvent.KEYCODE_PAGE_DOWN || c == KeyEvent.KEYCODE_DPAD_DOWN || c == KeyEvent.KEYCODE_DPAD_RIGHT
-        if (!up && !down) return false
+        if (c != KeyEvent.KEYCODE_PAGE_UP && c != KeyEvent.KEYCODE_PAGE_DOWN) return false
         if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
             val now = SystemClock.uptimeMillis()
-            if (now - lastKeyAt >= 120L) {
+            if (now - lastKeyAt >= 150L) {
                 lastKeyAt = now
-                markActivity()
-                if (down) v.toggleLasso() else v.recenter()
+                clearInk()
             }
         }
         return true
     }
 
     /**
-     * Compatibility mode: a finger tap / swipe that landed on the overlay while the pen was idle is
-     * re-played onto the app underneath. The overlay is made untouchable for the duration so the
-     * injected gesture falls through to the app.
+     * Window mode: a finger tap / swipe that landed on the overlay is re-played onto the app underneath.
+     * The overlay is made untouchable for the duration so the injected gesture falls through.
      */
     fun replay(xs: FloatArray, ys: FloatArray, n: Int, durMs: Long) {
         if (view == null || n <= 0) return

@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">FloatingPen</string>
     <string name="tile_label">Writing pad</string>
-    <string name="a11y_description">Draws the pen overlay above every app, reads the smart pen side buttons and passes finger gestures through to the app underneath. No screen content is read.</string>
+    <string name="a11y_description">Draws the pen layer above every app and receives the strokes of the smart pen and side buttons. Finger touches are not touched. No screen content is read.</string>
 </resources>

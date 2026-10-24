@@ -9,8 +9,11 @@ import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * Hosts the pen overlay (an accessibility overlay window), reads the smart pen's side buttons and
- * can replay finger gestures. It does not read any screen content.
+ * Hosts the pen overlay (an accessibility overlay window). It does not read any screen content.
+ *
+ * Android 14+: while the pad is on, the service asks the system for the pen's events
+ * (setMotionEventSources). The system then delivers every pen event ONLY to onMotionEvent, never to
+ * the app underneath, while finger touches are untouched and keep working in the apps.
  */
 class FloatingPenService : AccessibilityService() {
 
@@ -19,15 +22,6 @@ class FloatingPenService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        if (Build.VERSION.SDK_INT >= 34) {
-            try {
-                val info = serviceInfo
-                // Android 14+: observe stylus events system-wide without consuming them.
-                info.setMotionEventSources(InputDevice.SOURCE_STYLUS or InputDevice.SOURCE_BLUETOOTH_STYLUS)
-                serviceInfo = info
-            } catch (_: Throwable) {
-            }
-        }
         controller = PadController(this).also { it.start() }
     }
 
@@ -38,7 +32,22 @@ class FloatingPenService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean = controller?.onKey(event) ?: false
 
     override fun onMotionEvent(event: MotionEvent) {
-        controller?.onObservedMotion(event)
+        controller?.onPenMotion(event)
+    }
+
+    /** Start / stop receiving the pen's events (Android 14+). */
+    fun setPenCapture(on: Boolean) {
+        if (Build.VERSION.SDK_INT < 34) return
+        try {
+            val info = serviceInfo ?: return
+            info.motionEventSources = if (on) InputDevice.SOURCE_STYLUS or InputDevice.SOURCE_BLUETOOTH_STYLUS else 0
+            serviceInfo = info
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun clearInk() {
+        controller?.clearInk()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {

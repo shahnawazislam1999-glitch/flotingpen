@@ -2,19 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Draw over other apps -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!-- Haptic feedback for gestures -->
+    <!-- Haptic feedback when the ink is cleared -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Notification-panel "Turn off" / "Clear" buttons (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-
-    <!-- Directory / storage access -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
     <application
         android:allowBackup="false"
@@ -22,7 +13,6 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.FloatingPen">
 
         <activity
@@ -34,7 +24,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Hosts the pen overlay, receives the pen buttons and replays finger gestures -->
+        <!-- Hosts the pen overlay, receives the pen events and the pen side buttons -->
         <service
             android:name=".FloatingPenService"
             android:exported="true"
@@ -47,6 +37,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- "Turn off" button of the notification-panel entry -->
+        <receiver
+            android:name=".PadActionReceiver"
+            android:exported="false" />
 
         <!-- Quick Settings tile: turn the writing pad on/off without any on-screen icon -->
         <service
