@@ -60,7 +60,11 @@ class PadController(private val service: FloatingPenService) {
                 bubble.refreshMenu()
             }
             Prefs.WINDOW_MODE -> applyMode()
-            Prefs.BUBBLE_ON, Prefs.BUBBLE_ALPHA -> bubble.sync()
+            Prefs.BUBBLE_ON -> {
+                bubble.sync()
+                if (padOn()) PadNotifier.show(service) // refresh the Hide / Show bubble button
+            }
+            Prefs.BUBBLE_ALPHA -> bubble.sync()
             else -> bubble.refreshMenu()
         }
     }

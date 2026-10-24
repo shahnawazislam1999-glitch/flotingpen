@@ -123,16 +123,13 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
         )
     }
 
+    /** On-screen status messages are switched off on purpose (no "pen selected" / "eraser selected" popups). */
+    @Suppress("UNUSED_PARAMETER")
     fun flash(msg: String, ms: Long = 2200L) {
-        banner = msg
-        bannerUntil = SystemClock.uptimeMillis() + ms
-        invalidate()
-        postInvalidateDelayed(ms + 60L)
     }
 
     override fun onDraw(c: Canvas) {
         engine.draw(c)
-        drawToolChip(c)
         val t = banner ?: return
         if (SystemClock.uptimeMillis() >= bannerUntil) {
             banner = null

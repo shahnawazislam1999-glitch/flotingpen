@@ -16,6 +16,7 @@ import android.service.quicksettings.TileService
 object PadNotifier {
     const val ACTION_OFF = "com.raj.flotingpen.action.PAD_OFF"
     const val ACTION_CLEAR = "com.raj.flotingpen.action.PAD_CLEAR"
+    const val ACTION_BUBBLE = "com.raj.flotingpen.action.BUBBLE_TOGGLE"
     private const val CHANNEL = "pad_on"
     private const val ID = 4107
 
@@ -38,6 +39,7 @@ object PadNotifier {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val icon = Icon.createWithResource(ctx, R.drawable.ic_tile)
+            val bubbleOn = Prefs.get(ctx).getBoolean(Prefs.BUBBLE_ON, true)
             val n = Notification.Builder(ctx, CHANNEL)
                 .setSmallIcon(R.drawable.ic_tile)
                 .setContentTitle("Writing pad is on")
@@ -48,6 +50,7 @@ object PadNotifier {
                 .setShowWhen(false)
                 .setCategory(Notification.CATEGORY_SERVICE)
                 .addAction(Notification.Action.Builder(icon, "Clear", action(ctx, 1, ACTION_CLEAR)).build())
+                .addAction(Notification.Action.Builder(icon, if (bubbleOn) "Hide bubble" else "Show bubble", action(ctx, 4, ACTION_BUBBLE)).build())
                 .addAction(Notification.Action.Builder(icon, "Turn off", action(ctx, 3, ACTION_OFF)).build())
                 .build()
             nm.notify(ID, n)
@@ -79,6 +82,10 @@ class PadActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             PadNotifier.ACTION_OFF -> PadNotifier.turnOff(context)
             PadNotifier.ACTION_CLEAR -> FloatingPenService.instance?.clearInk()
+            PadNotifier.ACTION_BUBBLE -> {
+                val sp = Prefs.get(context)
+                sp.edit().putBoolean(Prefs.BUBBLE_ON, !sp.getBoolean(Prefs.BUBBLE_ON, true)).apply()
+            }
         }
     }
 }
