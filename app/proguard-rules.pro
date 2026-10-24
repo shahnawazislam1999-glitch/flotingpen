@@ -1,0 +1,2 @@
+-keep class com.raj.flotingpen.FloatingPenService { *; }
+-keep class com.raj.flotingpen.PadTileService { *; }

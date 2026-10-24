@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FloatingPen</string>
+    <string name="tile_label">Writing pad</string>
+    <string name="a11y_description">Draws the pen overlay above every app, reads the smart pen side buttons and passes finger gestures through to the app underneath. No screen content is read.</string>
+</resources>
