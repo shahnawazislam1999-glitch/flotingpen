@@ -13,6 +13,13 @@ object Prefs {
     const val COLOR = "color"                          // ARGB int (RED / BLUE / palette)
     const val SIZE_DP = "size_dp"                      // pen size in dp (1..30, step 0.5)
     const val PEN_TYPE = "pen_type"                    // Pen.NIRMAL / CLASSIC / PENCIL / ANNOT
+    const val ANNOT_SIZE_DP = "annot_size_dp"          // Annotation Pen size in dp (separate from SIZE_DP)
+    const val AUTO_SWITCH = "auto_switch"              // eraser / lasso go back to the pen after one use (default on)
+    const val WHITE_BOX = "white_box"                  // adjustable white rectangle under the ink (default off)
+    const val BOX_X = "box_x"
+    const val BOX_Y = "box_y"
+    const val BOX_W = "box_w"
+    const val BOX_H = "box_h"
     const val OPACITY = "opacity"                      // ink opacity percent 10..100
     const val WINDOW_MODE = "window_mode"              // fallback: overlay catches touches, fingers are replayed
     const val OFF_ON_SCREEN_OFF = "off_on_screen_off"  // power button switches the pad off (default on)
@@ -51,13 +58,26 @@ object Prefs {
     fun get(ctx: Context): SharedPreferences =
         ctx.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
-    fun size(p: SharedPreferences): Float = p.getFloat(SIZE_DP, 3f).coerceIn(1f, 30f)
+    fun autoSwitch(p: SharedPreferences): Boolean = p.getBoolean(AUTO_SWITCH, true)
 
-    /** +1 / -1: 0.5 dp steps while thin, 1 dp steps once thick. */
+    fun isAnnot(p: SharedPreferences): Boolean = p.getInt(PEN_TYPE, Pen.NIRMAL) == Pen.ANNOT
+
+    /** Settings key of the size that belongs to the pen in use: the Annotation Pen has its own size. */
+    fun sizeKey(p: SharedPreferences): String = if (isAnnot(p)) ANNOT_SIZE_DP else SIZE_DP
+
+    /** Size of the pen in use (Annotation Pen: its own size). */
+    fun size(p: SharedPreferences): Float = p.getFloat(sizeKey(p), 3f).coerceIn(1f, 30f)
+
+    /** Size shared by Nirmal / Classic / Pencil (also used for the eraser radius). */
+    fun penSize(p: SharedPreferences): Float = p.getFloat(SIZE_DP, 3f).coerceIn(1f, 30f)
+
+    fun annotSize(p: SharedPreferences): Float = p.getFloat(ANNOT_SIZE_DP, 3f).coerceIn(1f, 30f)
+
+    /** +1 / -1: 0.5 dp steps while thin, 1 dp steps once thick. Changes only the size of the pen in use. */
     fun stepSize(p: SharedPreferences, dir: Int) {
         val cur = size(p)
         val step = if (dir > 0) (if (cur < 4f) 0.5f else 1f) else (if (cur <= 4f) 0.5f else 1f)
-        p.edit().putFloat(SIZE_DP, (cur + dir * step).coerceIn(1f, 30f)).apply()
+        p.edit().putFloat(sizeKey(p), (cur + dir * step).coerceIn(1f, 30f)).apply()
     }
 
     fun opacity(p: SharedPreferences): Int = p.getInt(OPACITY, 100).coerceIn(10, 100)
@@ -91,5 +111,5 @@ class PrefsInkConfig(ctx: Context) : InkConfig {
     override fun color(): Int = prefs.getInt(Prefs.COLOR, Prefs.RED)
     override fun sizePx(): Float = Prefs.size(prefs) * density
     override fun opacity(): Float = Prefs.opacity(prefs) / 100f
-    override fun eraserPx(): Float = max(Prefs.size(prefs) * 2.5f, 10f) * density
+    override fun eraserPx(): Float = max(Prefs.penSize(prefs) * 2.5f, 10f) * density
 }

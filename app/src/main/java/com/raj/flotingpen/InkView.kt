@@ -205,6 +205,10 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
             engine.end(x, y, p, t)
         }
         gTool = -1
+        // One erase / one lasso, then straight back to the pen (setting "auto switch", on by default).
+        if ((tool == Pen.TOOL_ERASE || tool == Pen.TOOL_LASSO) && !holdFired && ctrl.autoSwitch() && ctrl.tool() != Pen.TOOL_WRITE) {
+            ctrl.setTool(Pen.TOOL_WRITE)
+        }
     }
 
     private fun toolName(t: Int) = when (t) {

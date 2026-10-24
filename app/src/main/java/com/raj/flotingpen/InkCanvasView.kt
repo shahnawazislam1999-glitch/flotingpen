@@ -16,6 +16,7 @@ class InkCanvasView(context: Context) : View(context) {
     val engine = InkEngine(this, PrefsInkConfig(context), true)
     var tool = Pen.TOOL_WRITE
     var fingerWrites = false
+    var onToolAuto: (() -> Unit)? = null
     var paper = true
         set(v) {
             field = v
@@ -87,6 +88,10 @@ class InkCanvasView(context: Context) : View(context) {
                 val k = if (i >= 0) i else 0
                 engine.end(e.getX(k), e.getY(k), e.getPressure(k).coerceIn(0f, 1f), e.eventTime)
                 activeId = -1
+                if (Prefs.autoSwitch(Prefs.get(context)) && tool != Pen.TOOL_WRITE) {
+                    tool = Pen.TOOL_WRITE
+                    onToolAuto?.invoke()
+                }
             }
         }
         return true

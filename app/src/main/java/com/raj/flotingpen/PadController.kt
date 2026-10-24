@@ -42,6 +42,7 @@ class PadController(private val service: FloatingPenService) {
     private val vibrator: Vibrator? = service.getSystemService(Vibrator::class.java)
 
     private var view: InkView? = null
+    private var box: WhiteBoxView? = null
     private var params: WindowManager.LayoutParams? = null
     private var touchableNow = false
     private var replaying = false
@@ -60,6 +61,11 @@ class PadController(private val service: FloatingPenService) {
                 bubble.refreshMenu()
             }
             Prefs.WINDOW_MODE -> applyMode()
+            Prefs.WHITE_BOX -> {
+                applyBox()
+                if (padOn()) PadNotifier.show(service)
+            }
+            Prefs.BOX_X, Prefs.BOX_Y, Prefs.BOX_W, Prefs.BOX_H -> {}
             Prefs.BUBBLE_ON -> {
                 bubble.sync()
                 if (padOn()) PadNotifier.show(service) // refresh the Hide / Show bubble button
@@ -81,6 +87,7 @@ class PadController(private val service: FloatingPenService) {
     fun padOn() = prefs.getBoolean(Prefs.PAD_ON, false)
     fun sizePx() = Prefs.size(prefs) * density
     fun tool(): Int = tool
+    fun autoSwitch(): Boolean = Prefs.autoSwitch(prefs)
     fun penTapClicks(): Boolean = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
     fun windowMode(): Boolean =
         if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
@@ -160,6 +167,7 @@ class PadController(private val service: FloatingPenService) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
         try {
+            if (prefs.getBoolean(Prefs.WHITE_BOX, false)) addBox()
             wm.addView(v, lp)
         } catch (e: Throwable) {
             Toast.makeText(service, "Pen layer could not start: " + e.message, Toast.LENGTH_LONG).show()
@@ -182,6 +190,50 @@ class PadController(private val service: FloatingPenService) {
         v.release()
         try {
             wm.removeView(v)
+        } catch (_: Throwable) {
+        }
+        removeBox()
+    }
+
+    // ---------------------------------------------------------------- white box
+
+    /** Adds the white box window. It must be added BEFORE the ink window so the ink is drawn above it. */
+    private fun addBox() {
+        if (box != null) return
+        val b = WhiteBoxView(service, wm, prefs)
+        try {
+            wm.addView(b, b.layoutParams())
+            box = b
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun removeBox() {
+        val b = box ?: return
+        box = null
+        try {
+            wm.removeView(b)
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Switch the white box on / off. When turned on, the ink window is re-added so it stays on top of the box. */
+    private fun applyBox() {
+        val want = prefs.getBoolean(Prefs.WHITE_BOX, false) && view != null
+        if (!want) {
+            removeBox()
+            return
+        }
+        if (box != null) return
+        val v = view ?: return
+        val lp = params ?: return
+        try {
+            wm.removeView(v)
+        } catch (_: Throwable) {
+        }
+        addBox()
+        try {
+            wm.addView(v, lp)
         } catch (_: Throwable) {
         }
     }

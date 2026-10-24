@@ -16,14 +16,15 @@ object SettingsIO {
     private val ACTION_KEYS = listOf(
         Prefs.BTN_UP_1, Prefs.BTN_UP_2, Prefs.BTN_DOWN_1, Prefs.BTN_DOWN_2, Prefs.HOLD_ACTION,
     )
-    private val BOOL_KEYS = listOf(Prefs.BUBBLE_ON, Prefs.OFF_ON_SCREEN_OFF, Prefs.PEN_TAP_CLICK)
+    private val BOOL_KEYS = listOf(Prefs.BUBBLE_ON, Prefs.OFF_ON_SCREEN_OFF, Prefs.PEN_TAP_CLICK, Prefs.AUTO_SWITCH)
 
     fun snapshot(ctx: Context): JSONObject {
         val p = Prefs.get(ctx)
         val o = JSONObject()
         o.put(Prefs.PEN_TYPE, p.getInt(Prefs.PEN_TYPE, Pen.NIRMAL).coerceIn(0, 3))
         o.put(Prefs.COLOR, p.getInt(Prefs.COLOR, Prefs.RED))
-        o.put(Prefs.SIZE_DP, Prefs.size(p).toDouble())
+        o.put(Prefs.SIZE_DP, Prefs.penSize(p).toDouble())
+        o.put(Prefs.ANNOT_SIZE_DP, Prefs.annotSize(p).toDouble())
         o.put(Prefs.OPACITY, Prefs.opacity(p))
         o.put(Prefs.BUBBLE_ALPHA, Prefs.bubbleAlpha(p))
         o.put(Prefs.HOLD_SEC, Prefs.holdSec(p))
@@ -48,6 +49,10 @@ object SettingsIO {
         }
         if (o.has(Prefs.SIZE_DP)) {
             e.putFloat(Prefs.SIZE_DP, o.optDouble(Prefs.SIZE_DP, 3.0).toFloat().coerceIn(1f, 30f))
+            n++
+        }
+        if (o.has(Prefs.ANNOT_SIZE_DP)) {
+            e.putFloat(Prefs.ANNOT_SIZE_DP, o.optDouble(Prefs.ANNOT_SIZE_DP, 3.0).toFloat().coerceIn(1f, 30f))
             n++
         }
         if (o.has(Prefs.OPACITY)) {

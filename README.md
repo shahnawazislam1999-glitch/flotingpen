@@ -56,3 +56,9 @@ opacity, undo, **Erase screen** (one tap), pen layer on/off. Drag it to move. Ch
   into one bitmap when the pen lifts. Input is stabilised with pressure/speed width and soft start/end tapers
   (same maths as the HTML reference).
 * Ink lives only in memory; clearing frees it.
+
+## v32 additions
+
+- **Auto switch back to pen** (Advanced, on by default): after one erase or one lasso the pen returns by itself.
+- **Separate Annotation Pen size**: Nirmal / Classic / Pencil share one size, the Annotation Pen keeps its own. Changing one never changes the other (app slider, bubble +/-, pen-button size actions all act on the pen in use).
+- **White box**: toggle in the notification panel (or Advanced in the app). A white rectangle appears under the ink - drag with a finger to move, drag the corner grip to resize; write on it with the pen.

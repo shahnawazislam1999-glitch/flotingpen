@@ -361,7 +361,8 @@ class FloatingBubble(private val service: FloatingPenService, private val ctrl: 
         }
 
         // ---- size ----
-        panel.addView(caption("PEN SIZE"))
+        val sizeCap = caption("PEN SIZE")
+        panel.addView(sizeCap)
         val sizeLabel = TextView(service).apply {
             gravity = Gravity.CENTER
             textSize = 16f
@@ -371,7 +372,10 @@ class FloatingBubble(private val service: FloatingPenService, private val ctrl: 
         val minus = btn("−") { Prefs.stepSize(prefs, -1) }.also { it.textSize = 22f; styleBtn(it, false) }
         val plus = btn("+") { Prefs.stepSize(prefs, +1) }.also { it.textSize = 22f; styleBtn(it, false) }
         panel.addView(row(minus, sizeLabel, plus))
-        refreshers.add { sizeLabel.text = String.format("%.1f dp", Prefs.size(prefs)) }
+        refreshers.add {
+            sizeLabel.text = String.format("%.1f dp", Prefs.size(prefs))
+            sizeCap.text = if (Prefs.isAnnot(prefs)) "ANNOTATION SIZE" else "PEN SIZE"
+        }
 
         // ---- opacity ----
         panel.addView(caption("INK OPACITY"))

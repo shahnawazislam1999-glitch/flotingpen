@@ -17,6 +17,8 @@ object PadNotifier {
     const val ACTION_OFF = "com.raj.flotingpen.action.PAD_OFF"
     const val ACTION_CLEAR = "com.raj.flotingpen.action.PAD_CLEAR"
     const val ACTION_BUBBLE = "com.raj.flotingpen.action.BUBBLE_TOGGLE"
+    const val ACTION_BOX = "com.raj.flotingpen.action.BOX_TOGGLE"
+    private const val ID_TOOLS = 4108
     private const val CHANNEL = "pad_on"
     private const val ID = 4107
 
@@ -40,6 +42,18 @@ object PadNotifier {
             )
             val icon = Icon.createWithResource(ctx, R.drawable.ic_tile)
             val bubbleOn = Prefs.get(ctx).getBoolean(Prefs.BUBBLE_ON, true)
+            val boxOn = Prefs.get(ctx).getBoolean(Prefs.WHITE_BOX, false)
+            // Android shows at most 3 buttons per notification: the bubble toggle moves to a small second one.
+            val tools = Notification.Builder(ctx, CHANNEL)
+                .setSmallIcon(R.drawable.ic_tile)
+                .setContentTitle(if (bubbleOn) "Bubble is shown" else "Bubble is hidden")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .addAction(Notification.Action.Builder(icon, if (bubbleOn) "Hide bubble" else "Show bubble", action(ctx, 4, ACTION_BUBBLE)).build())
+                .build()
+            nm.notify(ID_TOOLS, tools)
             val n = Notification.Builder(ctx, CHANNEL)
                 .setSmallIcon(R.drawable.ic_tile)
                 .setContentTitle("Writing pad is on")
@@ -50,7 +64,7 @@ object PadNotifier {
                 .setShowWhen(false)
                 .setCategory(Notification.CATEGORY_SERVICE)
                 .addAction(Notification.Action.Builder(icon, "Clear", action(ctx, 1, ACTION_CLEAR)).build())
-                .addAction(Notification.Action.Builder(icon, if (bubbleOn) "Hide bubble" else "Show bubble", action(ctx, 4, ACTION_BUBBLE)).build())
+                .addAction(Notification.Action.Builder(icon, if (boxOn) "White box: off" else "White box: on", action(ctx, 5, ACTION_BOX)).build())
                 .addAction(Notification.Action.Builder(icon, "Turn off", action(ctx, 3, ACTION_OFF)).build())
                 .build()
             nm.notify(ID, n)
@@ -70,7 +84,9 @@ object PadNotifier {
 
     fun cancel(ctx: Context) {
         try {
-            ctx.getSystemService(NotificationManager::class.java)?.cancel(ID)
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            nm?.cancel(ID)
+            nm?.cancel(ID_TOOLS)
         } catch (_: Throwable) {
         }
     }
@@ -82,6 +98,10 @@ class PadActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             PadNotifier.ACTION_OFF -> PadNotifier.turnOff(context)
             PadNotifier.ACTION_CLEAR -> FloatingPenService.instance?.clearInk()
+            PadNotifier.ACTION_BOX -> {
+                val sp = Prefs.get(context)
+                sp.edit().putBoolean(Prefs.WHITE_BOX, !sp.getBoolean(Prefs.WHITE_BOX, false)).apply()
+            }
             PadNotifier.ACTION_BUBBLE -> {
                 val sp = Prefs.get(context)
                 sp.edit().putBoolean(Prefs.BUBBLE_ON, !sp.getBoolean(Prefs.BUBBLE_ON, true)).apply()

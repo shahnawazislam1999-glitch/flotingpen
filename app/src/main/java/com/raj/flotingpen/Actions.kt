@@ -315,13 +315,14 @@ class PenButtons(
     private val prefs: SharedPreferences by lazy { Prefs.get(ctx) }
     private val runner: ActionRunner by lazy { ActionRunner(ctx, getTool, setTool, clear, undo, buzz) }
 
-    private class Snap(val tool: Int, val pen: Int, val color: Int, val size: Float, val opacity: Int)
+    private class Snap(val tool: Int, val pen: Int, val color: Int, val size: Float, val annotSize: Float, val opacity: Int)
 
     private fun take(): Snap = Snap(
         getTool(),
         prefs.getInt(Prefs.PEN_TYPE, Pen.NIRMAL),
         prefs.getInt(Prefs.COLOR, Prefs.RED),
-        Prefs.size(prefs),
+        Prefs.penSize(prefs),
+        Prefs.annotSize(prefs),
         Prefs.opacity(prefs),
     )
 
@@ -330,6 +331,7 @@ class PenButtons(
             .putInt(Prefs.PEN_TYPE, s.pen)
             .putInt(Prefs.COLOR, s.color)
             .putFloat(Prefs.SIZE_DP, s.size)
+            .putFloat(Prefs.ANNOT_SIZE_DP, s.annotSize)
             .putInt(Prefs.OPACITY, s.opacity)
             .apply()
         setTool(s.tool)

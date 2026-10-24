@@ -38,6 +38,8 @@ class MainActivity : Activity() {
     private lateinit var screenOffSwitch: Switch
     private lateinit var tapSwitch: Switch
     private lateinit var bubbleSwitch: Switch
+    private lateinit var autoSwitch: Switch
+    private lateinit var boxSwitch: Switch
     private lateinit var a11yStatus: TextView
     private lateinit var notifStatus: TextView
     private lateinit var modeInfo: TextView
@@ -191,8 +193,8 @@ class MainActivity : Activity() {
         sizeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                 val v = 1f + p * 0.5f
-                sizeLabel.text = "Size: " + String.format("%.1f", v) + " dp"
-                if (fromUser && !binding) prefs.edit().putFloat(Prefs.SIZE_DP, v).apply()
+                sizeLabel.text = sizeTitle() + ": " + String.format("%.1f", v) + " dp"
+                if (fromUser && !binding) prefs.edit().putFloat(Prefs.sizeKey(prefs), v).apply()
             }
             override fun onStartTrackingTouch(s: SeekBar?) {}
             override fun onStopTrackingTouch(s: SeekBar?) {}
@@ -243,6 +245,7 @@ class MainActivity : Activity() {
         padCard2.addView(tr)
 
         canvas = InkCanvasView(this)
+        canvas.onToolAuto = { refresh() }
         val ar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun action(label: String, onClick: () -> Unit): TextView {
             val c = chip(label)
@@ -310,6 +313,30 @@ class MainActivity : Activity() {
         // ---- advanced ----
         val advCard = card()
         advCard.addView(heading("Advanced"))
+        autoSwitch = Switch(this).apply {
+            text = "Auto switch back to pen"
+            setTextColor(textMain)
+            textSize = 14f
+        }
+        autoSwitch.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+            if (!binding) prefs.edit().putBoolean(Prefs.AUTO_SWITCH, on).apply()
+        }
+        advCard.addView(autoSwitch)
+        advCard.addView(
+            text("After one erase or one lasso the pen comes back by itself - no need to press the button again.", 12f, textDim).also { pad(it, 0, 2, 0, 8) },
+        )
+        boxSwitch = Switch(this).apply {
+            text = "White box (also in the notification)"
+            setTextColor(textMain)
+            textSize = 14f
+        }
+        boxSwitch.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+            if (!binding) prefs.edit().putBoolean(Prefs.WHITE_BOX, on).apply()
+        }
+        advCard.addView(boxSwitch)
+        advCard.addView(
+            text("A white rectangle you can move and resize with a finger (drag the corner). Write on it with the pen.", 12f, textDim).also { pad(it, 0, 2, 0, 8) },
+        )
         tapSwitch = Switch(this).apply {
             text = "A quick pen tap (no writing) clicks the app below"
             setTextColor(textMain)
@@ -377,6 +404,8 @@ class MainActivity : Activity() {
         root.addView(testCard)
     }
 
+    private fun sizeTitle(): String = if (Prefs.isAnnot(prefs)) "Annotation pen size (separate)" else "Pen size"
+
     private fun refresh() {
         binding = true
         padSwitch.isChecked = prefs.getBoolean(Prefs.PAD_ON, false)
@@ -385,6 +414,8 @@ class MainActivity : Activity() {
         screenOffSwitch.isChecked = prefs.getBoolean(Prefs.OFF_ON_SCREEN_OFF, true)
         tapSwitch.isChecked = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
         bubbleSwitch.isChecked = prefs.getBoolean(Prefs.BUBBLE_ON, true)
+        autoSwitch.isChecked = Prefs.autoSwitch(prefs)
+        boxSwitch.isChecked = prefs.getBoolean(Prefs.WHITE_BOX, false)
         modeInfo.text = if (window) "Mode: window (pen writes, finger taps are replayed)" else "Mode: pen capture (fingers are never touched)"
 
         val pt = prefs.getInt(Prefs.PEN_TYPE, Pen.NIRMAL).coerceIn(0, 3)
@@ -395,7 +426,7 @@ class MainActivity : Activity() {
 
         val size = Prefs.size(prefs)
         sizeBar.progress = ((size - 1f) / 0.5f).toInt().coerceIn(0, 58)
-        sizeLabel.text = "Size: " + String.format("%.1f", size) + " dp"
+        sizeLabel.text = sizeTitle() + ": " + String.format("%.1f", size) + " dp"
         val op = Prefs.opacity(prefs)
         opBar.progress = (op - 10).coerceIn(0, 90)
         opLabel.text = "Ink opacity: $op %"
