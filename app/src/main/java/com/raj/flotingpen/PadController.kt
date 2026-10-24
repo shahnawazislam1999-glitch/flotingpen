@@ -3,6 +3,7 @@ package com.raj.flotingpen
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -15,6 +16,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.service.quicksettings.TileService
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -46,10 +48,20 @@ class PadController(private val service: FloatingPenService) {
     private var lastKeyAt = 0L
     private var screenOffRegistered = false
 
+    val inkConfig = PrefsInkConfig(service)
+    private var tool = Pen.TOOL_WRITE
+    private val keys = ToolKeys({ tool }, { setTool(it) }, { clearInk() })
+    private val bubble = FloatingBubble(service, this)
+
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            Prefs.PAD_ON -> applyPad()
+            Prefs.PAD_ON -> {
+                applyPad()
+                bubble.refreshMenu()
+            }
             Prefs.WINDOW_MODE -> applyMode()
+            Prefs.BUBBLE_ON, Prefs.BUBBLE_ALPHA -> bubble.sync()
+            else -> bubble.refreshMenu()
         }
     }
 
@@ -63,8 +75,9 @@ class PadController(private val service: FloatingPenService) {
     // ---------------------------------------------------------------- settings (read live)
 
     fun padOn() = prefs.getBoolean(Prefs.PAD_ON, false)
-    fun sizePx() = prefs.getFloat(Prefs.SIZE_DP, 3f) * density
-    fun color(): Int = if (prefs.getInt(Prefs.COLOR, Prefs.RED) == Prefs.BLUE) Prefs.BLUE else Prefs.RED
+    fun sizePx() = Prefs.size(prefs) * density
+    fun tool(): Int = tool
+    fun penTapClicks(): Boolean = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
     fun windowMode(): Boolean =
         if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
 
@@ -86,6 +99,11 @@ class PadController(private val service: FloatingPenService) {
         } catch (_: Throwable) {
         }
         applyPad()
+        bubble.sync()
+    }
+
+    fun onConfigChanged() {
+        main.postDelayed({ bubble.clampToScreen() }, 400L)
     }
 
     fun stop() {
@@ -98,6 +116,7 @@ class PadController(private val service: FloatingPenService) {
             screenOffRegistered = false
         }
         main.removeCallbacksAndMessages(null)
+        bubble.remove()
         hide()
         PadNotifier.cancel(service)
     }
@@ -150,6 +169,7 @@ class PadController(private val service: FloatingPenService) {
     }
 
     private fun hide() {
+        tool = Pen.TOOL_WRITE
         service.setPenCapture(false)
         val v = view ?: return
         view = null
@@ -165,6 +185,37 @@ class PadController(private val service: FloatingPenService) {
     fun clearInk() {
         view?.clearInk()
         vibrate(25)
+    }
+
+    fun undo() {
+        view?.undo()
+    }
+
+    fun setTool(t: Int) {
+        if (tool == t) return
+        tool = t
+        vibrate(15)
+        view?.onToolChanged(t)
+        view?.invalidate()
+        bubble.refreshMenu()
+    }
+
+    /** Red <-> blue (nib held still for 4 seconds). */
+    fun toggleColor() {
+        val next = if (inkConfig.color() == Prefs.BLUE) Prefs.RED else Prefs.BLUE
+        prefs.edit().putInt(Prefs.COLOR, next).apply()
+        vibrate(40)
+        view?.flash(if (next == Prefs.BLUE) "Blue pen" else "Red pen", 1200L)
+    }
+
+    fun setPad(on: Boolean) {
+        prefs.edit().putBoolean(Prefs.PAD_ON, on).apply()
+        if (!on) {
+            try {
+                TileService.requestListeningState(service, ComponentName(service, PadTileService::class.java))
+            } catch (_: Throwable) {
+            }
+        }
     }
 
     // ---------------------------------------------------------------- touch routing
@@ -198,16 +249,19 @@ class PadController(private val service: FloatingPenService) {
         v.onPenCaptured(e)
     }
 
-    /** Xiaomi smart pen side buttons arrive as Page Up / Page Down keys: either one clears the ink. */
+    /**
+     * Xiaomi smart pen side buttons arrive as Page Up / Page Down keys.
+     *  Down: writing <-> stroke eraser.  Up: 1 press = lasso, 2 quick presses = clear the screen.
+     */
     fun onKey(e: KeyEvent): Boolean {
         if (view == null || !padOn()) return false
         val c = e.keyCode
         if (c != KeyEvent.KEYCODE_PAGE_UP && c != KeyEvent.KEYCODE_PAGE_DOWN) return false
         if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
             val now = SystemClock.uptimeMillis()
-            if (now - lastKeyAt >= 150L) {
+            if (now - lastKeyAt >= 90L) {
                 lastKeyAt = now
-                clearInk()
+                if (c == KeyEvent.KEYCODE_PAGE_DOWN) keys.pageDown() else keys.pageUp()
             }
         }
         return true

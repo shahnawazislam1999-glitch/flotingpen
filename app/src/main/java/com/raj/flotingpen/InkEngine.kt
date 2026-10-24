@@ -2,161 +2,620 @@ package com.raj.flotingpen
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.RectF
 import android.os.SystemClock
-import kotlin.math.PI
+import android.view.View
+import java.util.Random
+import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-/** Area that erases ink: finger scrub (circle) or pen lasso (polygon). Works in world coordinates. */
-abstract class EraseRegion {
-    abstract val left: Float
-    abstract val top: Float
-    abstract val right: Float
-    abstract val bottom: Float
-    abstract fun hit(x: Float, y: Float): Boolean
+/** Pen types and tools shared by the overlay, the bubble menu and the in-app pad. */
+object Pen {
+    const val NIRMAL = 0
+    const val CLASSIC = 1
+    const val PENCIL = 2
+    const val ANNOT = 3
 
-    fun mayHit(s: Stroke): Boolean {
-        val p = s.pad()
-        return !(s.maxX + p < left || s.minX - p > right || s.maxY + p < top || s.minY - p > bottom)
-    }
+    const val TOOL_WRITE = 0
+    const val TOOL_ERASE = 1
+    const val TOOL_LASSO = 2
+
+    val NAMES = arrayOf("Nirmal Pen", "Classic Pen", "Pencil", "Annotation Pen")
+    val SHORT = arrayOf("Nirmal", "Classic", "Pencil", "Glow")
 }
 
-class CircleRegion : EraseRegion() {
-    var cx = 0f
-    var cy = 0f
-    var r = 0f
-    override val left: Float get() = cx - r
-    override val top: Float get() = cy - r
-    override val right: Float get() = cx + r
-    override val bottom: Float get() = cy + r
-
-    fun set(x: Float, y: Float, radius: Float): CircleRegion {
-        cx = x
-        cy = y
-        r = radius
-        return this
-    }
-
-    override fun hit(x: Float, y: Float): Boolean {
-        val dx = x - cx
-        val dy = y - cy
-        return dx * dx + dy * dy <= r * r
-    }
+interface InkConfig {
+    fun penType(): Int
+    fun color(): Int
+    fun sizePx(): Float
+    fun opacity(): Float
+    fun eraserPx(): Float
 }
 
-class PolyRegion(private val xs: FloatArray, private val ys: FloatArray, private val n: Int) : EraseRegion() {
-    override val left: Float
-    override val top: Float
-    override val right: Float
-    override val bottom: Float
+interface InkEvents {
+    fun onLassoResult(count: Int)
+}
 
-    init {
-        var l = Float.MAX_VALUE
-        var t = Float.MAX_VALUE
-        var r = -Float.MAX_VALUE
-        var b = -Float.MAX_VALUE
-        for (i in 0 until n) {
-            if (xs[i] < l) l = xs[i]
-            if (xs[i] > r) r = xs[i]
-            if (ys[i] < t) t = ys[i]
-            if (ys[i] > b) b = ys[i]
-        }
-        left = l
-        top = t
-        right = r
-        bottom = b
-    }
+/** Per-pen smoothing profile, ported 1:1 from the HTML reference (PEN_PROFILES). Sizes are in dp. */
+class PenProfile(
+    val stab: Float, val rMul: Float, val rMin: Float, val rMax: Float,
+    val taperN: Int, val taperFloor: Float,
+    val pBase: Float, val pMul: Float,
+    val spFloor: Float, val spCeil: Float,
+    val wSmooth: Float,
+    val endN: Int, val endFloor: Float,
+    val baseScale: Float, val grain: Boolean,
+)
 
-    override fun hit(x: Float, y: Float): Boolean {
-        if (x < left || x > right || y < top || y > bottom) return false
-        var inside = false
-        var j = n - 1
-        for (i in 0 until n) {
-            if ((ys[i] > y) != (ys[j] > y) &&
-                x < (xs[j] - xs[i]) * (y - ys[i]) / (ys[j] - ys[i]) + xs[i]
-            ) {
-                inside = !inside
-            }
-            j = i
-        }
-        return inside
+private val P_NIRMAL = PenProfile(0.62f, 1.3f, 4f, 12f, 2, 0.55f, 0.62f, 0.65f, 0.8f, 1.0f, 0.4f, 5, 0.22f, 1f, false)
+private val P_CLASSIC = PenProfile(0.45f, 2.2f, 7f, 26f, 5, 0.35f, 0.45f, 1.0f, 0.55f, 1.05f, 0.28f, 0, 1f, 1f, false)
+private val P_PENCIL = PenProfile(0.64f, 0.9f, 2.5f, 6.5f, 3, 0.42f, 0.58f, 0.48f, 0.78f, 1.0f, 0.44f, 4, 0.28f, 0.7f, true)
+
+/** Pencil texture, baked once per point so a stroke always redraws identically. */
+class Grain(
+    @JvmField val jx1: Float, @JvmField val jy1: Float,
+    @JvmField val jx2: Float, @JvmField val jy2: Float,
+    @JvmField val jx3: Float, @JvmField val jy3: Float,
+    @JvmField val ga1: Float, @JvmField val ga2: Float, @JvmField val ga3: Float,
+    @JvmField val sx: FloatArray, @JvmField val sy: FloatArray,
+    @JvmField val sr: FloatArray, @JvmField val sa: FloatArray,
+)
+
+class Pt(@JvmField var x: Float, @JvmField var y: Float, @JvmField var w: Float, @JvmField val g: Grain?)
+
+class Stroke(
+    @JvmField val type: Int,
+    @JvmField val color: Int,
+    @JvmField val opacity: Float,
+    @JvmField val baseW: Float,
+) {
+    @JvmField val pts = ArrayList<Pt>(64)
+    @JvmField var l = Float.MAX_VALUE
+    @JvmField var t = Float.MAX_VALUE
+    @JvmField var r = -Float.MAX_VALUE
+    @JvmField var b = -Float.MAX_VALUE
+    @JvmField var path: Path? = null   // annotation strokes only
+    @JvmField var alpha = 1f
+    @JvmField var fadeAt = 0L
+
+    fun add(p: Pt) {
+        pts.add(p)
+        if (p.x < l) l = p.x
+        if (p.x > r) r = p.x
+        if (p.y < t) t = p.y
+        if (p.y > b) b = p.y
     }
 }
 
 /**
- * Holds every stroke and a single screen-sized bitmap cache of the committed ink.
+ * The drawing brain. Strokes are kept as vectors, so they can be erased stroke-by-stroke, lassoed and undone.
  *
- * RAM design:
- *  - strokes are packed float arrays (no per-point objects)
- *  - the bitmap is only allocated while ink exists; clearing recycles it immediately
- *  - nothing is ever written to storage, so a clear really frees the memory and leaves no trace
+ * Smoothness design:
+ *  - the stroke being written is drawn as vectors straight on the (GPU) canvas, so no big bitmap is
+ *    re-uploaded while the pen moves;
+ *  - the finished stroke is baked into ONE screen bitmap (a single upload when the pen lifts);
+ *  - input is stabilised, width follows pressure + speed and tapers at both ends (same maths as the HTML reference);
+ *  - every historical sample of a move event is used.
  */
-class InkEngine(private val density: Float) {
+class InkEngine(
+    private val view: View,
+    private val cfg: InkConfig,
+    private val keepOnResize: Boolean,
+) {
+    var events: InkEvents? = null
 
-    class Live(val stroke: Stroke, val profile: PenProfile, val baseW: Float) {
-        var sx = 0f
-        var sy = 0f
-        var lx = 0f
-        var ly = 0f
-        var lt = 0L
-        var cw = 0f
-        var radius = 1f
-    }
-
-    val strokes = ArrayList<Stroke>()
-    val hasInk: Boolean get() = strokes.isNotEmpty()
+    private val d = view.resources.displayMetrics.density
+    private val strokes = ArrayList<Stroke>()
+    private val annots = ArrayList<Stroke>()
 
     private var bmp: Bitmap? = null
     private var bc: Canvas? = null
-    private var cachePanX = 0f
-    private var cachePanY = 0f
-    private var w = 0
-    private var h = 0
-    private var seedCounter = 1
+    private var vw = 0
+    private var vh = 0
+    private var bmpDirty = false
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val path = Path()
-    private val dirty = RectF()
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val tmp = Path()
+    private val lassoPath = Path()
+    private val rnd = Random()
 
-    // ---------------------------------------------------------------- cache management
+    // ---- live stroke ----
+    private var cur: Stroke? = null
+    private var prof = P_NIRMAL
+    private var stabX = 0f
+    private var stabY = 0f
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var lastT = 0L
+    private var curW = 1f
+    private var radius = 6f
 
-    fun resize(nw: Int, nh: Int, panX: Float, panY: Float) {
-        if (nw == w && nh == h) return
-        w = nw
-        h = nh
-        releaseBitmap()
-        if (strokes.isNotEmpty()) rebuild(panX, panY)
+    // ---- gesture ----
+    private var gTool = -1
+    private var ex = 0f
+    private var ey = 0f
+    private var lx = FloatArray(256)
+    private var ly = FloatArray(256)
+    private var ln = 0
+
+    // ---- fade ----
+    private var ticking = false
+    private val fadeTick = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            var changed = false
+            val it = annots.iterator()
+            while (it.hasNext()) {
+                val a = it.next()
+                if (a === cur || a.fadeAt == 0L || now < a.fadeAt) continue
+                val k = (now - a.fadeAt) / 350f
+                if (k >= 1f) {
+                    it.remove()
+                    changed = true
+                } else {
+                    a.alpha = 1f - k
+                    changed = true
+                }
+            }
+            if (changed) view.invalidate()
+            if (annots.isNotEmpty()) view.postOnAnimation(this) else ticking = false
+        }
     }
 
-    private fun ensureCache(panX: Float, panY: Float): Canvas? {
-        val existing = bc
-        if (existing != null) return existing
-        if (w <= 0 || h <= 0) return null
-        val b = try {
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        } catch (e: OutOfMemoryError) {
-            return null
+    // ====================================================================================
+    //  public api
+    // ====================================================================================
+
+    fun hasInk(): Boolean = strokes.isNotEmpty() || annots.isNotEmpty()
+
+    fun onSize(w: Int, h: Int) {
+        if (w == vw && h == vh) return
+        vw = w
+        vh = h
+        abort()
+        if (keepOnResize) {
+            releaseBitmap()
+            bmpDirty = strokes.isNotEmpty()
+        } else {
+            clearAll()
         }
-        val c = Canvas(b)
-        c.translate(panX, panY)
-        bmp = b
-        bc = c
-        cachePanX = panX
-        cachePanY = panY
-        return c
+    }
+
+    fun release() {
+        abort()
+        view.removeCallbacks(fadeTick)
+        ticking = false
+        strokes.clear()
+        annots.clear()
+        releaseBitmap()
+    }
+
+    fun clearAll() {
+        abort()
+        strokes.clear()
+        annots.clear()
+        releaseBitmap()
+        view.invalidate()
+    }
+
+    fun undo(): Boolean {
+        abort()
+        if (strokes.isEmpty()) return false
+        strokes.removeAt(strokes.size - 1)
+        redrawAll()
+        view.invalidate()
+        return true
+    }
+
+    fun draw(c: Canvas) {
+        if (bmpDirty) {
+            bmpDirty = false
+            redrawAll()
+        }
+        bmp?.let { c.drawBitmap(it, 0f, 0f, null) }
+        val s = cur
+        if (s != null && s.type != Pen.ANNOT && s.pts.isNotEmpty()) drawStrokeLayered(c, s)
+        if (annots.isNotEmpty()) drawAnnots(c)
+        if (gTool == Pen.TOOL_LASSO && ln > 1) drawLasso(c)
+        if (gTool == Pen.TOOL_ERASE) drawRing(c)
+    }
+
+    // ---------------------------------------------------------------- gesture
+
+    fun begin(tool: Int, x: Float, y: Float, p: Float, t: Long) {
+        abort()
+        gTool = tool
+        when (tool) {
+            Pen.TOOL_WRITE -> beginStroke(x, y, p, t)
+            Pen.TOOL_ERASE -> {
+                ex = x
+                ey = y
+                eraseAt(x, y)
+                invalidateRing()
+            }
+            Pen.TOOL_LASSO -> {
+                ln = 0
+                lassoAdd(x, y)
+            }
+        }
+    }
+
+    fun move(x: Float, y: Float, p: Float, t: Long) {
+        when (gTool) {
+            Pen.TOOL_WRITE -> sample(x, y, p, t)
+            Pen.TOOL_ERASE -> eraseMove(x, y)
+            Pen.TOOL_LASSO -> lassoAdd(x, y)
+        }
+    }
+
+    fun end(x: Float, y: Float, p: Float, t: Long) {
+        when (gTool) {
+            Pen.TOOL_WRITE -> endWrite(x, y)
+            Pen.TOOL_ERASE -> {
+                invalidateRing()
+            }
+            Pen.TOOL_LASSO -> endLasso()
+        }
+        gTool = -1
+    }
+
+    /** Throw away the stroke / lasso / eraser gesture in progress (nothing is committed). */
+    fun abort() {
+        val s = cur
+        if (s != null) {
+            if (s.type == Pen.ANNOT) annots.remove(s)
+            cur = null
+        }
+        val wasRing = gTool == Pen.TOOL_ERASE
+        val wasLasso = gTool == Pen.TOOL_LASSO
+        gTool = -1
+        ln = 0
+        if (s != null || wasRing || wasLasso) view.invalidate()
+    }
+
+    // ====================================================================================
+    //  writing
+    // ====================================================================================
+
+    private fun clamp(v: Float, lo: Float, hi: Float): Float = if (v < lo) lo else if (v > hi) hi else v
+
+    private fun beginStroke(x: Float, y: Float, p: Float, t: Long) {
+        val type = cfg.penType()
+        prof = when (type) {
+            Pen.CLASSIC -> P_CLASSIC
+            Pen.PENCIL -> P_PENCIL
+            else -> P_NIRMAL
+        }
+        val size = cfg.sizePx()
+        val baseW = if (type == Pen.ANNOT) size else size * prof.baseScale
+        val opacity = if (type == Pen.ANNOT) 1f else cfg.opacity()
+        val s = Stroke(type, cfg.color() or 0xFF000000.toInt(), opacity, baseW)
+        val pr = if (p > 0f) p else 0.5f
+        val w0 = if (type == Pen.ANNOT) baseW else {
+            val iw = max(0.5f * d, baseW * (prof.pBase + pr * prof.pMul))
+            startTaper(iw, 0)
+        }
+        radius = clamp(baseW * prof.rMul, prof.rMin * d, prof.rMax * d)
+        stabX = x
+        stabY = y
+        lastRawX = x
+        lastRawY = y
+        lastT = t
+        curW = w0
+        cur = s
+        if (type == Pen.ANNOT) {
+            val path = Path()
+            path.moveTo(x, y)
+            s.path = path
+            annots.add(s)
+            startFade()
+        }
+        addPoint(s, x, y, w0)
+        dirty(s)
+    }
+
+    private fun startTaper(w: Float, idx: Int): Float {
+        val n = prof.taperN
+        if (n <= 0 || idx >= n) return w
+        return w * (prof.taperFloor + (1f - prof.taperFloor) * (idx.toFloat() / n))
+    }
+
+    private fun addPoint(s: Stroke, x: Float, y: Float, w: Float) {
+        val g = if (s.type == Pen.PENCIL) makeGrain(w) else null
+        val n = s.pts.size
+        if (s.type == Pen.ANNOT && n >= 1) {
+            val pr = s.pts[n - 1]
+            s.path?.quadTo(pr.x, pr.y, (pr.x + x) / 2f, (pr.y + y) / 2f)
+        }
+        s.add(Pt(x, y, w, g))
+    }
+
+    private fun sample(x: Float, y: Float, p: Float, t: Long) {
+        val s = cur ?: return
+        val dx = x - stabX
+        val dy = y - stabY
+        val dist = hypot(dx, dy)
+        if (dist < MIN_MOVE * d) return
+        val pull = min(1f, dist / radius) * prof.stab
+        stabX += dx * pull
+        stabY += dy * pull
+
+        val w: Float
+        if (s.type == Pen.ANNOT) {
+            w = s.baseW
+        } else {
+            val dt = max(1L, t - lastT).toFloat()
+            val speed = hypot(x - lastRawX, y - lastRawY) / d / dt // dp per ms
+            val pr = if (p > 0f) p else 0.5f
+            val pf = prof.pBase + pr * prof.pMul
+            val sf = clamp(prof.spCeil - speed * 0.5f, prof.spFloor, prof.spCeil)
+            val target = max(0.5f * d, s.baseW * pf * sf)
+            curW += (target - curW) * prof.wSmooth
+            w = startTaper(curW, s.pts.size)
+            lastT = t
+        }
+        lastRawX = x
+        lastRawY = y
+        addPoint(s, stabX, stabY, w)
+        dirty(s)
+    }
+
+    private fun endWrite(x: Float, y: Float) {
+        val s = cur ?: return
+        val n = s.pts.size
+        if (n >= 1) {
+            val last = s.pts[n - 1]
+            // close the small gap between the smoothed line and the real pen position
+            if (hypot(x - last.x, y - last.y) > 0.3f * d && hypot(x - last.x, y - last.y) < 40f * d) {
+                addPoint(s, x, y, last.w)
+            }
+        }
+        if (s.type == Pen.ANNOT) {
+            val last = s.pts[s.pts.size - 1]
+            s.path?.lineTo(last.x, last.y)
+            s.fadeAt = SystemClock.uptimeMillis() + 1000L
+            cur = null
+            startFade()
+            dirty(s)
+            return
+        }
+        applyEndTaper(s)
+        strokes.add(s)
+        cur = null
+        ensureBitmap()
+        val c = bc
+        if (c != null) drawStrokeLayered(c, s)
+        invalidateBounds(s)
+    }
+
+    private fun applyEndTaper(s: Stroke) {
+        val n = prof.endN
+        if (n <= 0) return
+        val pts = s.pts
+        val count = min(n, pts.size)
+        if (count < 2) return
+        for (k in 0 until count) {
+            val idx = pts.size - 1 - k
+            val frac = k.toFloat() / (count - 1)
+            val mult = prof.endFloor + (1f - prof.endFloor) * frac
+            pts[idx].w = pts[idx].w * mult
+        }
+    }
+
+    private fun makeGrain(w: Float): Grain {
+        val wc = w / d
+        val mag = clamp(wc * 0.24f + 0.22f, 0.24f, 1.15f) * d
+        val a1 = rnd.nextFloat() * TWO_PI
+        val a2 = rnd.nextFloat() * TWO_PI
+        val a3 = rnd.nextFloat() * TWO_PI
+        val spread = clamp(wc * 0.85f + 0.6f, 0.7f, 3.6f) * d
+        val cnt = 3 + rnd.nextInt(4)
+        val sx = FloatArray(cnt)
+        val sy = FloatArray(cnt)
+        val sr = FloatArray(cnt)
+        val sa = FloatArray(cnt)
+        for (i in 0 until cnt) {
+            val ang = rnd.nextFloat() * TWO_PI
+            val dist = rnd.nextFloat() * spread
+            sx[i] = cos(ang) * dist
+            sy[i] = sin(ang) * dist
+            sr[i] = (0.14f + rnd.nextFloat() * 0.32f) * d
+            sa[i] = 0.1f + rnd.nextFloat() * 0.32f
+        }
+        return Grain(
+            cos(a1) * mag, sin(a1) * mag,
+            cos(a2) * mag * 0.72f, sin(a2) * mag * 0.72f,
+            cos(a3) * mag * 0.46f, sin(a3) * mag * 0.46f,
+            0.5f + rnd.nextFloat() * 0.5f, 0.35f + rnd.nextFloat() * 0.45f, 0.25f + rnd.nextFloat() * 0.4f,
+            sx, sy, sr, sa,
+        )
+    }
+
+    // ====================================================================================
+    //  rendering
+    // ====================================================================================
+
+    private fun col(color: Int, a: Float): Int {
+        val ai = (clamp(a, 0f, 1f) * 255f + 0.5f).toInt()
+        return (color and 0x00FFFFFF) or (ai shl 24)
+    }
+
+    private fun drawStrokeLayered(c: Canvas, s: Stroke) {
+        if (s.opacity < 0.999f && s.type != Pen.PENCIL && s.type != Pen.ANNOT) {
+            val pad = s.baseW * 2f + 4f * d
+            val sc = c.saveLayerAlpha(s.l - pad, s.t - pad, s.r + pad, s.b + pad, (s.opacity * 255f + 0.5f).toInt())
+            drawStroke(c, s)
+            c.restoreToCount(sc)
+        } else {
+            drawStroke(c, s)
+        }
+    }
+
+    private fun drawStroke(c: Canvas, s: Stroke) {
+        val n = s.pts.size
+        if (n == 0) return
+        if (n == 1) {
+            drawDot(c, s, s.pts[0])
+            return
+        }
+        for (i in 1 until n) seg(c, s, i)
+        tail(c, s, s.pts[n - 2], s.pts[n - 1])
+    }
+
+    private fun drawDot(c: Canvas, s: Stroke, p: Pt) {
+        val r = max(0.4f * d, p.w / 2f)
+        fillPaint.style = Paint.Style.FILL
+        if (s.type == Pen.PENCIL) {
+            val op = s.opacity
+            fillPaint.color = col(s.color, 0.62f * op)
+            c.drawCircle(p.x, p.y, r * 0.78f, fillPaint)
+            val g = p.g
+            if (g != null) {
+                fillPaint.color = col(s.color, 0.28f * op)
+                c.drawCircle(p.x + g.jx1, p.y + g.jy1, r * 0.55f, fillPaint)
+                for (k in g.sx.indices) {
+                    fillPaint.color = col(s.color, g.sa[k] * op)
+                    c.drawCircle(p.x + g.sx[k], p.y + g.sy[k], g.sr[k], fillPaint)
+                }
+            }
+        } else {
+            fillPaint.color = col(s.color, 1f)
+            c.drawCircle(p.x, p.y, r, fillPaint)
+        }
+    }
+
+    /** One smooth curve segment ending at pts[i]: midpoint -> midpoint with the shared point as control. */
+    private fun seg(c: Canvas, s: Stroke, i: Int) {
+        val p1 = s.pts[i - 1]
+        val p2 = s.pts[i]
+        val pmx: Float
+        val pmy: Float
+        if (i >= 2) {
+            val p0 = s.pts[i - 2]
+            pmx = (p0.x + p1.x) / 2f
+            pmy = (p0.y + p1.y) / 2f
+        } else {
+            pmx = p1.x
+            pmy = p1.y
+        }
+        val nmx = (p1.x + p2.x) / 2f
+        val nmy = (p1.y + p2.y) / 2f
+        tmp.reset()
+        tmp.moveTo(pmx, pmy)
+        tmp.quadTo(p1.x, p1.y, nmx, nmy)
+        paint.style = Paint.Style.STROKE
+        if (s.type == Pen.PENCIL) {
+            pencilSeg(c, s, p2, max(0.5f * d, (p1.w + p2.w) / 2f))
+        } else {
+            paint.color = col(s.color, 1f)
+            paint.strokeWidth = max(0.6f * d, (p1.w + p2.w) / 2f)
+            c.drawPath(tmp, paint)
+        }
+    }
+
+    private fun pass(c: Canvas, s: Stroke, jx: Float, jy: Float, a: Float, w: Float) {
+        paint.color = col(s.color, a)
+        paint.strokeWidth = w
+        c.save()
+        c.translate(jx, jy)
+        c.drawPath(tmp, paint)
+        c.restore()
+    }
+
+    /** Graphite: firm core + three thin jittered passes + loose speckles (all alphas scaled by opacity). */
+    private fun pencilSeg(c: Canvas, s: Stroke, p2: Pt, w: Float) {
+        val op = s.opacity
+        pass(c, s, 0f, 0f, 0.6f * op, max(0.45f * d, w * 0.62f))
+        val g = p2.g ?: return
+        pass(c, s, g.jx1, g.jy1, 0.3f * g.ga1 * op, max(0.35f * d, w * 0.48f))
+        pass(c, s, -g.jx2, -g.jy2, 0.22f * g.ga2 * op, max(0.3f * d, w * 0.36f))
+        pass(c, s, g.jx3, -g.jy3, 0.16f * g.ga3 * op, max(0.25f * d, w * 0.26f))
+        fillPaint.style = Paint.Style.FILL
+        for (k in g.sx.indices) {
+            fillPaint.color = col(s.color, g.sa[k] * op)
+            c.drawCircle(p2.x + g.sx[k], p2.y + g.sy[k], g.sr[k], fillPaint)
+        }
+    }
+
+    /** Closes the half-segment gap the midpoint technique leaves at the pen tip. */
+    private fun tail(c: Canvas, s: Stroke, p1: Pt, p2: Pt) {
+        tmp.reset()
+        tmp.moveTo((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
+        tmp.lineTo(p2.x, p2.y)
+        paint.style = Paint.Style.STROKE
+        if (s.type == Pen.PENCIL) {
+            val w = max(0.5f * d, p2.w)
+            paint.color = col(s.color, 0.6f * s.opacity)
+            paint.strokeWidth = w * 0.62f
+            c.drawPath(tmp, paint)
+        } else {
+            paint.color = col(s.color, 1f)
+            paint.strokeWidth = max(0.6f * d, p2.w)
+            c.drawPath(tmp, paint)
+        }
+    }
+
+    /** Annotation strokes: a soft glow (3 layered widths), fading away after 1 second. */
+    private fun drawAnnots(c: Canvas) {
+        paint.style = Paint.Style.STROKE
+        for (a in annots) {
+            val al = a.alpha
+            if (al <= 0f) continue
+            if (a.pts.size < 2) {
+                val p = a.pts[0]
+                fillPaint.style = Paint.Style.FILL
+                fillPaint.color = col(a.color, 0.25f * al)
+                c.drawCircle(p.x, p.y, a.baseW * 1.6f, fillPaint)
+                fillPaint.color = col(a.color, al)
+                c.drawCircle(p.x, p.y, a.baseW / 2f, fillPaint)
+                continue
+            }
+            val path = a.path ?: continue
+            paint.color = col(a.color, 0.16f * al)
+            paint.strokeWidth = a.baseW * 3.4f
+            c.drawPath(path, paint)
+            paint.color = col(a.color, 0.32f * al)
+            paint.strokeWidth = a.baseW * 1.9f
+            c.drawPath(path, paint)
+            paint.color = col(a.color, al)
+            paint.strokeWidth = a.baseW
+            c.drawPath(path, paint)
+        }
+    }
+
+    private fun startFade() {
+        if (ticking) return
+        ticking = true
+        view.postOnAnimation(fadeTick)
+    }
+
+    // ====================================================================================
+    //  bitmap
+    // ====================================================================================
+
+    private fun ensureBitmap() {
+        if (bmp != null || vw <= 0 || vh <= 0) return
+        try {
+            val b = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888)
+            bmp = b
+            bc = Canvas(b)
+        } catch (e: OutOfMemoryError) {
+            bmp = null
+            bc = null
+        }
     }
 
     private fun releaseBitmap() {
@@ -165,331 +624,242 @@ class InkEngine(private val density: Float) {
         bc = null
     }
 
-    /** Re-render every stroke for a new canvas offset. Called when a pan ends or the size changes. */
-    fun rebuild(panX: Float, panY: Float) {
+    private fun redrawAll() {
         if (strokes.isEmpty()) {
             releaseBitmap()
             return
         }
-        val c = ensureCache(panX, panY) ?: return
-        bmp?.eraseColor(0)
-        c.setMatrix(null)
-        c.translate(panX, panY)
-        cachePanX = panX
-        cachePanY = panY
-        for (s in strokes) drawFull(c, s, 1f, 1f)
-    }
-
-    fun draw(canvas: Canvas, panX: Float, panY: Float) {
+        ensureBitmap()
         val b = bmp ?: return
-        canvas.drawBitmap(b, panX - cachePanX, panY - cachePanY, bmpPaint)
-    }
-
-    /** Wipe all ink and give the bitmap memory back right away. */
-    fun clearAll() {
-        strokes.clear()
-        releaseBitmap()
-    }
-
-    // ---------------------------------------------------------------- writing
-
-    private fun startTaper(width: Float, idx: Int, p: PenProfile): Float {
-        if (p.taperN <= 0 || idx >= p.taperN) return width
-        return width * (p.taperFloor + (1f - p.taperFloor) * (idx.toFloat() / p.taperN))
-    }
-
-    fun begin(
-        x: Float, y: Float, pressure: Float, t: Long,
-        color: Int, penType: Int, sizePx: Float, annot: Boolean,
-        panX: Float, panY: Float,
-    ): Live {
-        val prof = PenProfiles.of(penType)
-        val base = sizePx * prof.baseScale
-        val s = Stroke(color, penType, annot, seedCounter++ * 7919 + 13)
-        val live = Live(s, prof, base)
-        val p = if (pressure > 0f) pressure else 0.5f
-        val w0 = startTaper(max(1f, base * (prof.pressureBase + p * prof.pressureMul)), 0, prof)
-        s.add(x, y, w0)
-        live.sx = x
-        live.sy = y
-        live.lx = x
-        live.ly = y
-        live.lt = t
-        live.cw = w0
-        live.radius = (base * prof.radiusMul).coerceIn(prof.radiusMin * density, prof.radiusMax * density)
-        if (!annot) {
-            if (bc != null && (cachePanX != panX || cachePanY != panY)) rebuild(panX, panY)
-            strokes.add(s)
-            val c = ensureCache(panX, panY)
-            if (c != null) drawDot(c, s, 1f, 1f)
-        }
-        return live
-    }
-
-    /** Adds one raw pen sample. Returns true if a point was added. */
-    fun move(live: Live, x: Float, y: Float, pressure: Float, t: Long): Boolean {
-        val s = live.stroke
-        val prof = live.profile
-        val dx = x - live.sx
-        val dy = y - live.sy
-        val d = hypot(dx, dy)
-        if (d < MIN_MOVE * density) return false
-
-        val pull = min(1f, d / live.radius) * prof.stab
-        live.sx += dx * pull
-        live.sy += dy * pull
-
-        val dt = max(1L, t - live.lt).toFloat()
-        val speed = hypot(x - live.lx, y - live.ly) / dt / density // dp per ms
-        val p = if (pressure > 0f) pressure else 0.5f
-        val pf = prof.pressureBase + p * prof.pressureMul
-        val sf = (prof.speedCeil - speed * 0.5f).coerceIn(prof.speedFloor, prof.speedCeil)
-        val target = max(1f, live.baseW * pf * sf)
-        live.cw += (target - live.cw) * prof.widthSmooth
-        val wv = startTaper(live.cw, s.n, prof)
-        live.lt = t
-        live.lx = x
-        live.ly = y
-
-        s.add(live.sx, live.sy, wv)
-        if (!s.annot) {
-            val c = bc
-            if (c != null) drawSeg(c, s, s.n - 1, 1f, 1f)
-        }
-        return true
-    }
-
-    /** Pen lifted: taper the tail like the reference pad, then tidy the stroke's memory. */
-    fun end(live: Live) {
-        val s = live.stroke
-        val prof = live.profile
-        s.endedAt = SystemClock.uptimeMillis()
-        val count = min(prof.endTaperN, s.n)
-        var tapered = false
-        if (!s.annot && count >= 2) {
-            for (k in 0 until count) {
-                val idx = s.n - 1 - k
-                val frac = k.toFloat() / (count - 1)
-                val mult = prof.endTaperFloor + (1f - prof.endTaperFloor) * frac
-                s.setW(idx, s.w(idx) * mult)
-            }
-            tapered = true
-        }
-        s.trim()
-        if (s.annot) return
-        if (tapered) {
-            val from = max(0, s.n - count - 2)
-            var l = Float.MAX_VALUE
-            var t = Float.MAX_VALUE
-            var r = -Float.MAX_VALUE
-            var b = -Float.MAX_VALUE
-            for (i in from until s.n) {
-                l = min(l, s.x(i)); r = max(r, s.x(i))
-                t = min(t, s.y(i)); b = max(b, s.y(i))
-            }
-            val pad = s.pad() + 2f
-            dirty.set(l - pad, t - pad, r + pad, b + pad)
-            redrawRegion(dirty)
-        } else {
-            val c = bc
-            if (c != null) drawTail(c, s, 1f, 1f)
-        }
-    }
-
-    /** Drop a stroke entirely (used when a second finger arrives right after an accidental touch). */
-    fun discard(s: Stroke) {
-        if (!strokes.remove(s)) return
-        if (strokes.isEmpty()) {
-            releaseBitmap()
-            return
-        }
-        val p = s.pad()
-        dirty.set(s.minX - p, s.minY - p, s.maxX + p, s.maxY + p)
-        redrawRegion(dirty)
-    }
-
-    // ---------------------------------------------------------------- erasing
-
-    /**
-     * Removes every point inside [region]. Strokes are split into the pieces that survive, so a
-     * scrub or lasso erases exactly the covered part of a stroke instead of the whole stroke.
-     */
-    fun erase(region: EraseRegion): Boolean {
-        var res: ArrayList<Stroke>? = null
-        var any = false
-        for (idx in 0 until strokes.size) {
-            val s = strokes[idx]
-            var hit = false
-            if (region.mayHit(s)) {
-                for (i in 0 until s.n) {
-                    if (region.hit(s.x(i), s.y(i))) {
-                        hit = true
-                        break
-                    }
-                }
-            }
-            if (hit) {
-                var out = res
-                if (out == null) {
-                    out = ArrayList(strokes.size + 4)
-                    for (k in 0 until idx) out.add(strokes[k])
-                    res = out
-                }
-                val p = s.pad()
-                if (!any) dirty.set(s.minX - p, s.minY - p, s.maxX + p, s.maxY + p)
-                else dirty.union(s.minX - p, s.minY - p, s.maxX + p, s.maxY + p)
-                any = true
-                split(s, region, out)
-            } else {
-                res?.add(s)
-            }
-        }
-        val out = res ?: return false
-        strokes.clear()
-        strokes.addAll(out)
-        if (strokes.isEmpty()) releaseBitmap() else redrawRegion(dirty)
-        return true
-    }
-
-    private fun split(s: Stroke, region: EraseRegion, out: ArrayList<Stroke>) {
-        var cur: Stroke? = null
-        for (i in 0 until s.n) {
-            if (region.hit(s.x(i), s.y(i))) {
-                cur?.trim()
-                cur = null
-            } else {
-                var c = cur
-                if (c == null) {
-                    c = Stroke(s.color, s.penType, false, s.seed)
-                    c.idxBase = s.idxBase + i
-                    out.add(c)
-                    cur = c
-                }
-                c.add(s.x(i), s.y(i), s.w(i))
-            }
-        }
-        cur?.trim()
-    }
-
-    private fun redrawRegion(r: RectF) {
         val c = bc ?: return
-        c.save()
-        c.clipRect(r)
-        c.drawColor(0, PorterDuff.Mode.CLEAR)
-        for (s in strokes) {
-            val p = s.pad()
-            if (s.maxX + p < r.left || s.minX - p > r.right || s.maxY + p < r.top || s.minY - p > r.bottom) continue
-            drawFull(c, s, 1f, 1f)
+        b.eraseColor(0)
+        for (s in strokes) drawStrokeLayered(c, s)
+    }
+
+    // ====================================================================================
+    //  dirty rectangles
+    // ====================================================================================
+
+    private fun dirty(s: Stroke) {
+        val n = s.pts.size
+        if (n == 0) return
+        val a = s.pts[n - 1]
+        val b = if (n >= 2) s.pts[n - 2] else a
+        val c = if (n >= 3) s.pts[n - 3] else b
+        val pad = if (s.type == Pen.ANNOT) s.baseW * 2.2f + 8f * d else max(a.w, b.w) + 10f * d
+        val l = min(a.x, min(b.x, c.x)) - pad
+        val t = min(a.y, min(b.y, c.y)) - pad
+        val r = max(a.x, max(b.x, c.x)) + pad
+        val bt = max(a.y, max(b.y, c.y)) + pad
+        view.invalidate(floor(l).toInt(), floor(t).toInt(), ceil(r).toInt(), ceil(bt).toInt())
+    }
+
+    private fun invalidateBounds(s: Stroke) {
+        val pad = s.baseW * 2f + 12f * d
+        view.invalidate(
+            floor(s.l - pad).toInt(), floor(s.t - pad).toInt(),
+            ceil(s.r + pad).toInt(), ceil(s.b + pad).toInt(),
+        )
+    }
+
+    // ====================================================================================
+    //  stroke eraser
+    // ====================================================================================
+
+    private fun eraseMove(x: Float, y: Float) {
+        val r = cfg.eraserPx()
+        val dist = hypot(x - ex, y - ey)
+        val steps = max(1, ceil(dist / (r * 0.5f)).toInt())
+        invalidateRing()
+        for (k in 1..steps) {
+            val f = k.toFloat() / steps
+            eraseAt(ex + (x - ex) * f, ey + (y - ey) * f)
         }
-        c.restore()
+        ex = x
+        ey = y
+        invalidateRing()
     }
 
-    // ---------------------------------------------------------------- rendering
-
-    fun drawFull(c: Canvas, s: Stroke, alpha: Float, wMul: Float) {
-        if (s.n == 0) return
-        if (s.n == 1) {
-            drawDot(c, s, alpha, wMul)
-            return
+    /** Pen touching a stroke removes the whole stroke. */
+    private fun eraseAt(px: Float, py: Float) {
+        val r = cfg.eraserPx()
+        var removed = false
+        var i = strokes.size - 1
+        while (i >= 0) {
+            val s = strokes[i]
+            if (hit(s, px, py, r)) {
+                strokes.removeAt(i)
+                removed = true
+            }
+            i--
         }
-        for (i in 1 until s.n) drawSeg(c, s, i, alpha, wMul)
-        drawTail(c, s, alpha, wMul)
-    }
-
-    /** Annotation pen: soft glow underneath, crisp core on top. */
-    fun drawAnnot(c: Canvas, s: Stroke, alpha: Float) {
-        drawFull(c, s, alpha * 0.22f, 3.0f)
-        drawFull(c, s, alpha, 1f)
-    }
-
-    private fun drawDot(c: Canvas, s: Stroke, alpha: Float, wMul: Float) {
-        fill.color = s.color
-        fill.alpha = (alpha * 255f).toInt().coerceIn(0, 255)
-        c.drawCircle(s.x(0), s.y(0), max(0.5f, s.w(0) * 0.5f * wMul), fill)
-    }
-
-    private fun drawTail(c: Canvas, s: Stroke, alpha: Float, wMul: Float) {
-        if (s.n < 2) return
-        val a = s.n - 2
-        val b = s.n - 1
-        path.reset()
-        path.moveTo((s.x(a) + s.x(b)) * 0.5f, (s.y(a) + s.y(b)) * 0.5f)
-        path.lineTo(s.x(b), s.y(b))
-        paint.color = s.color
-        paint.alpha = (alpha * 255f).toInt().coerceIn(0, 255)
-        paint.strokeWidth = max(0.6f, s.w(b) * wMul)
-        c.drawPath(path, paint)
-    }
-
-    private fun drawSeg(c: Canvas, s: Stroke, i: Int, alpha: Float, wMul: Float) {
-        val x1 = s.x(i - 1)
-        val y1 = s.y(i - 1)
-        val x2 = s.x(i)
-        val y2 = s.y(i)
-        val sx = if (i >= 2) (s.x(i - 2) + x1) * 0.5f else x1
-        val sy = if (i >= 2) (s.y(i - 2) + y1) * 0.5f else y1
-        path.reset()
-        path.moveTo(sx, sy)
-        path.quadTo(x1, y1, (x1 + x2) * 0.5f, (y1 + y2) * 0.5f)
-        val w = (s.w(i - 1) + s.w(i)) * 0.5f * wMul
-
-        if (s.penType == PEN_PENCIL && !s.annot) {
-            drawPencil(c, s, i, w, alpha, x2, y2)
-            return
-        }
-        paint.color = s.color
-        paint.alpha = (alpha * 255f).toInt().coerceIn(0, 255)
-        paint.strokeWidth = max(0.6f, w)
-        c.drawPath(path, paint)
-    }
-
-    /** Textured graphite: main pass, two mis-registered grain passes and a few speckles. Grain is hash-based, so it never shimmers. */
-    private fun drawPencil(c: Canvas, s: Stroke, i: Int, w: Float, alpha: Float, px: Float, py: Float) {
-        val gi = s.idxBase + i
-        paint.color = s.color
-        paint.alpha = (alpha * 0.9f * 255f).toInt().coerceIn(0, 255)
-        paint.strokeWidth = max(0.6f, w * 0.85f)
-        c.drawPath(path, paint)
-
-        val mag = (w * 0.24f + 0.22f * density).coerceIn(0.24f * density, 1.15f * density)
-        for (k in 0..1) {
-            val ang = rnd(s.seed, gi, k) * TWO_PI
-            val a = alpha * (0.3f + 0.3f * rnd(s.seed, gi, k + 5))
-            c.save()
-            c.translate(cos(ang) * mag * (1f - 0.3f * k), sin(ang) * mag * (1f - 0.3f * k))
-            paint.alpha = (a * 255f).toInt().coerceIn(0, 255)
-            paint.strokeWidth = max(0.5f, w * 0.5f)
-            c.drawPath(path, paint)
-            c.restore()
-        }
-
-        fill.color = s.color
-        val spread = w * 0.85f + 0.6f * density
-        for (k in 0 until 4) {
-            val ang = rnd(s.seed, gi, 10 + k) * TWO_PI
-            val dist = rnd(s.seed, gi, 20 + k) * spread
-            fill.alpha = (alpha * (0.1f + 0.32f * rnd(s.seed, gi, 30 + k)) * 255f).toInt().coerceIn(0, 255)
-            c.drawCircle(
-                px + cos(ang) * dist, py + sin(ang) * dist,
-                (0.14f + 0.32f * rnd(s.seed, gi, 40 + k)) * density + 0.3f, fill,
-            )
+        if (removed) {
+            redrawAll()
+            view.invalidate()
         }
     }
 
-    private fun rnd(a: Int, b: Int, c: Int): Float {
-        var h = a * K1 + b * K2 + c * K3
-        h = h xor (h ushr 15)
-        h *= K4
-        h = h xor (h ushr 12)
-        return (h and 0xFFFFFF) / 16777216f
+    private fun hit(s: Stroke, px: Float, py: Float, r: Float): Boolean {
+        val m = r + s.baseW * 1.5f
+        if (px < s.l - m || px > s.r + m || py < s.t - m || py > s.b + m) return false
+        val pts = s.pts
+        if (pts.size == 1) {
+            val p = pts[0]
+            val rr = r + p.w / 2f
+            val dx = px - p.x
+            val dy = py - p.y
+            return dx * dx + dy * dy <= rr * rr
+        }
+        for (i in 1 until pts.size) {
+            val a = pts[i - 1]
+            val b = pts[i]
+            val rr = r + max(a.w, b.w) / 2f
+            if (distSegSq(px, py, a.x, a.y, b.x, b.y) <= rr * rr) return true
+        }
+        return false
+    }
+
+    private fun distSegSq(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+        val dx = bx - ax
+        val dy = by - ay
+        val l2 = dx * dx + dy * dy
+        var t = if (l2 < 1e-6f) 0f else ((px - ax) * dx + (py - ay) * dy) / l2
+        t = clamp(t, 0f, 1f)
+        val cx = ax + t * dx - px
+        val cy = ay + t * dy - py
+        return cx * cx + cy * cy
+    }
+
+    private fun drawRing(c: Canvas) {
+        val r = cfg.eraserPx()
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f * d
+        paint.color = 0x66000000
+        c.drawCircle(ex, ey, r, paint)
+        paint.strokeWidth = 1.5f * d
+        paint.color = 0xFFFFFFFF.toInt()
+        c.drawCircle(ex, ey, r, paint)
+    }
+
+    private fun invalidateRing() {
+        val m = cfg.eraserPx() + 4f * d
+        view.invalidate(floor(ex - m).toInt(), floor(ey - m).toInt(), ceil(ex + m).toInt(), ceil(ey + m).toInt())
+    }
+
+    // ====================================================================================
+    //  lasso
+    // ====================================================================================
+
+    private fun lassoAdd(x: Float, y: Float) {
+        if (ln > 0 && abs(x - lx[ln - 1]) + abs(y - ly[ln - 1]) < 2f * d) return
+        if (ln >= 6000) return
+        if (ln == lx.size) {
+            lx = lx.copyOf(ln * 2)
+            ly = ly.copyOf(ln * 2)
+        }
+        lx[ln] = x
+        ly[ln] = y
+        ln++
+        val px = if (ln >= 2) lx[ln - 2] else x
+        val py = if (ln >= 2) ly[ln - 2] else y
+        val m = 8f * d
+        view.invalidate(
+            floor(min(x, px) - m).toInt(), floor(min(y, py) - m).toInt(),
+            ceil(max(x, px) + m).toInt(), ceil(max(y, py) + m).toInt(),
+        )
+    }
+
+    private fun drawLasso(c: Canvas) {
+        lassoPath.reset()
+        lassoPath.moveTo(lx[0], ly[0])
+        for (i in 1 until ln) lassoPath.lineTo(lx[i], ly[i])
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2.5f * d
+        paint.color = 0xFFFFB300.toInt()
+        val old = paint.pathEffect
+        paint.pathEffect = DashPathEffect(floatArrayOf(10f * d, 7f * d), 0f)
+        c.drawPath(lassoPath, paint)
+        paint.pathEffect = old
+        // closing hint: pen position back to the start
+        paint.color = 0x66FFB300
+        paint.strokeWidth = 1.5f * d
+        c.drawLine(lx[ln - 1], ly[ln - 1], lx[0], ly[0], paint)
+    }
+
+    private fun inPoly(x: Float, y: Float): Boolean {
+        var inside = false
+        var j = ln - 1
+        for (i in 0 until ln) {
+            val xi = lx[i]
+            val yi = ly[i]
+            val xj = lx[j]
+            val yj = ly[j]
+            if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside
+            j = i
+        }
+        return inside
+    }
+
+    /** Strokes with at least half of their points inside the loop are selected and erased. */
+    private fun endLasso() {
+        var count = 0
+        if (ln >= 3) {
+            var i = strokes.size - 1
+            while (i >= 0) {
+                val s = strokes[i]
+                var inside = 0
+                for (p in s.pts) if (inPoly(p.x, p.y)) inside++
+                if (inside * 2 >= s.pts.size && s.pts.isNotEmpty()) {
+                    strokes.removeAt(i)
+                    count++
+                }
+                i--
+            }
+            if (count > 0) redrawAll()
+        }
+        ln = 0
+        view.invalidate()
+        events?.onLassoResult(count)
     }
 
     companion object {
         private const val MIN_MOVE = 0.12f
-        private val TWO_PI = (2.0 * PI).toFloat()
-        private const val K1 = 0x27d4eb2d
-        private const val K2 = 0x165667b1
-        private val K3 = 0x85ebca6b.toInt()
-        private const val K4 = 0x2c1b3c6d
+        private const val TWO_PI = 6.2831855f
+    }
+}
+
+/**
+ * Smart pen side buttons -> tools. Shared by the overlay and the in-app pad.
+ *  Down button: writing <-> stroke eraser (from lasso it goes straight back to writing).
+ *  Up button:   1 press = lasso, 2 quick presses = clear the screen and write again.
+ */
+class ToolKeys(
+    private val getTool: () -> Int,
+    private val setTool: (Int) -> Unit,
+    private val clear: () -> Unit,
+) {
+    private var lastUpAt = 0L
+    private var upCount = 0
+
+    fun pageDown() {
+        upCount = 0
+        setTool(if (getTool() == Pen.TOOL_WRITE) Pen.TOOL_ERASE else Pen.TOOL_WRITE)
+    }
+
+    fun pageUp() {
+        val now = SystemClock.uptimeMillis()
+        if (upCount == 1 && now - lastUpAt <= DOUBLE_MS) {
+            upCount = 0
+            clear()
+            setTool(Pen.TOOL_WRITE)
+            return
+        }
+        upCount = 1
+        lastUpAt = now
+        setTool(if (getTool() == Pen.TOOL_LASSO) Pen.TOOL_WRITE else Pen.TOOL_LASSO)
+    }
+
+    companion object {
+        const val DOUBLE_MS = 500L
     }
 }

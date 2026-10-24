@@ -27,21 +27,49 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import kotlin.math.min
 
-/** Settings screen. Everything is built in code, so the project needs no extra libraries. */
+/** Home screen: every pen mode, a practice pad, the bubble and the settings. Built in code, no extra libraries. */
 class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var padSwitch: Switch
     private lateinit var windowSwitch: Switch
     private lateinit var screenOffSwitch: Switch
-    private lateinit var colorRed: TextView
-    private lateinit var colorBlue: TextView
+    private lateinit var tapSwitch: Switch
+    private lateinit var bubbleSwitch: Switch
     private lateinit var a11yStatus: TextView
     private lateinit var notifStatus: TextView
     private lateinit var modeInfo: TextView
     private lateinit var probe: PenProbe
+    private lateinit var canvas: InkCanvasView
+    private lateinit var sizeLabel: TextView
+    private lateinit var sizeBar: SeekBar
+    private lateinit var opLabel: TextView
+    private lateinit var opBar: SeekBar
+    private lateinit var bubbleLabel: TextView
+    private lateinit var bubbleBar: SeekBar
+    private lateinit var fingerChip: TextView
+    private lateinit var paperChip: TextView
+    private val penChips = ArrayList<TextView>()
+    private val toolChips = ArrayList<TextView>()
+    private val swatches = ArrayList<View>()
     private var binding = false
+
+    private val keys = ToolKeys(
+        { if (::canvas.isInitialized) canvas.tool else Pen.TOOL_WRITE },
+        { t ->
+            if (::canvas.isInitialized) {
+                canvas.tool = t
+                refresh()
+            }
+        },
+        { if (::canvas.isInitialized) canvas.engine.clearAll() },
+    )
+
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        runOnUiThread { if (::canvas.isInitialized) refresh() }
+    }
 
     private val bg = Color.parseColor("#0F1420")
     private val card = Color.parseColor("#1A2133")
@@ -50,6 +78,7 @@ class MainActivity : Activity() {
     private val textDim = Color.parseColor("#9AA6BF")
     private val ok = Color.parseColor("#4CD08B")
     private val bad = Color.parseColor("#FF6B6B")
+    private val chipOff = Color.parseColor("#2A3350")
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -61,7 +90,13 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
         refresh()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
     }
 
     // ====================================================================================
@@ -76,17 +111,18 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(bg)
             isFillViewport = true
-            addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
+        val maxW = min(resources.displayMetrics.widthPixels, dp(780))
+        scroll.addView(root, FrameLayout.LayoutParams(maxW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
         setContentView(scroll)
 
-        root.addView(text("FloatingPen", 26f, textMain, bold = true))
+        root.addView(text("FloatingPen  v2", 26f, textMain, bold = true))
         root.addView(text("The pen writes on the screen. Your fingers use the apps normally.", 14f, textDim).also { pad(it, 0, 2, 0, 14) })
 
         // ---- writing pad switch ----
         val padCard = card()
         padSwitch = Switch(this).apply {
-            text = "Writing pad"
+            text = "Writing pad (pen layer over all apps)"
             textSize = 18f
             setTextColor(textMain)
         }
@@ -103,44 +139,175 @@ class MainActivity : Activity() {
         padCard.addView(modeInfo)
         padCard.addView(
             text(
-                "Also in Quick Settings (\"Writing pad\" tile) and in the notification panel (Turn off / Clear). " +
-                    "Pen side button = clear the ink. Power button = pad turns off.",
+                "Smart pen buttons (pad on):\n" +
+                    "• Down button: erase mode (touch a stroke to erase it) - press again to write\n" +
+                    "• Up button: 1 press = lasso (circle strokes to erase) - 2 quick presses = clear screen\n" +
+                    "• Down button from lasso = back to writing at once\n" +
+                    "• Hold the pen nib still for 4 seconds = red / blue\n" +
+                    "• Quick pen tap without writing = click in the app below\n" +
+                    "Also: Quick Settings tile, notification buttons, and the tiny floating bubble.",
                 12f, textDim,
-            ).also { pad(it, 0, 6, 0, 0) },
+            ).also { pad(it, 0, 8, 0, 0) },
         )
         root.addView(padCard)
 
-        // ---- pen ----
+        // ---- pen modes ----
         val penCard = card()
-        penCard.addView(heading("Pen"))
-        val sizeLabel = text("", 13f, textDim)
+        penCard.addView(heading("Pen modes"))
+        val modeNote = arrayOf(
+            "Nirmal Pen - smooth, fast, no-lag handwriting",
+            "Classic Pen - bolder, heavier smoothing",
+            "Pencil - grainy graphite, for tiny handwriting",
+            "Annotation Pen - glowing mark that fades after 1 second",
+        )
+        val r1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        penChips.clear()
+        for (i in 0..3) {
+            val c = chip(Pen.NAMES[i])
+            c.setOnClickListener { prefs.edit().putInt(Prefs.PEN_TYPE, i).apply(); refresh() }
+            penChips.add(c)
+            val lp = LinearLayout.LayoutParams(0, dp(46), 1f)
+            lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+            (if (i < 2) r1 else r2).addView(c, lp)
+        }
+        penCard.addView(r1)
+        penCard.addView(r2)
+        penCard.addView(text(modeNote.joinToString("\n"), 12f, textDim).also { pad(it, 0, 6, 0, 0) })
+
+        sizeLabel = text("", 13f, textDim).also { pad(it, 0, 12, 0, 0) }
         penCard.addView(sizeLabel)
-        val sizeBar = SeekBar(this).apply { max = 11 }
+        sizeBar = SeekBar(this).apply { max = 58 }
         sizeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                sizeLabel.text = "Size: ${p + 1} dp"
-                if (fromUser && !binding) prefs.edit().putFloat(Prefs.SIZE_DP, (p + 1).toFloat()).apply()
+                val v = 1f + p * 0.5f
+                sizeLabel.text = "Size: " + String.format("%.1f", v) + " dp"
+                if (fromUser && !binding) prefs.edit().putFloat(Prefs.SIZE_DP, v).apply()
             }
             override fun onStartTrackingTouch(s: SeekBar?) {}
             override fun onStopTrackingTouch(s: SeekBar?) {}
         })
         penCard.addView(sizeBar)
-        sizeBar.progress = (prefs.getFloat(Prefs.SIZE_DP, 3f).toInt() - 1).coerceIn(0, 11)
 
-        penCard.addView(text("Colour", 13f, textDim).also { pad(it, 0, 10, 0, 6) })
+        opLabel = text("", 13f, textDim).also { pad(it, 0, 8, 0, 0) }
+        penCard.addView(opLabel)
+        opBar = SeekBar(this).apply { max = 90 }
+        opBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                opLabel.text = "Ink opacity: " + (10 + p) + " %"
+                if (fromUser && !binding) prefs.edit().putInt(Prefs.OPACITY, 10 + p).apply()
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+        penCard.addView(opBar)
+
+        penCard.addView(text("Colour (hold the nib still 4 s to flip red / blue)", 13f, textDim).also { pad(it, 0, 12, 0, 6) })
         val colorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        colorRed = chip("Red")
-        colorBlue = chip("Blue")
-        colorRed.setOnClickListener { prefs.edit().putInt(Prefs.COLOR, Prefs.RED).apply(); refresh() }
-        colorBlue.setOnClickListener { prefs.edit().putInt(Prefs.COLOR, Prefs.BLUE).apply(); refresh() }
-        colorRow.addView(colorRed, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.rightMargin = dp(8) })
-        colorRow.addView(colorBlue, LinearLayout.LayoutParams(0, dp(44), 1f))
+        swatches.clear()
+        for (c in Prefs.PALETTE) {
+            val v = View(this)
+            v.setOnClickListener { prefs.edit().putInt(Prefs.COLOR, c).apply(); refresh() }
+            swatches.add(v)
+            val lp = LinearLayout.LayoutParams(0, dp(44), 1f)
+            lp.setMargins(dp(4), 0, dp(4), 0)
+            colorRow.addView(v, lp)
+        }
         penCard.addView(colorRow)
         root.addView(penCard)
+
+        // ---- practice pad ----
+        val padCard2 = card()
+        padCard2.addView(heading("Practice pad - try every pen here"))
+        val tr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        toolChips.clear()
+        val toolNames = arrayOf("Write", "Erase stroke", "Lasso")
+        for (i in 0..2) {
+            val c = chip(toolNames[i])
+            c.setOnClickListener { canvas.tool = i; refresh() }
+            toolChips.add(c)
+            val lp = LinearLayout.LayoutParams(0, dp(44), 1f)
+            lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+            tr.addView(c, lp)
+        }
+        padCard2.addView(tr)
+
+        canvas = InkCanvasView(this)
+        val ar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun action(label: String, onClick: () -> Unit): TextView {
+            val c = chip(label)
+            c.background = rounded(chipOff, 12)
+            c.setOnClickListener { onClick() }
+            val lp = LinearLayout.LayoutParams(0, dp(44), 1f)
+            lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+            ar.addView(c, lp)
+            return c
+        }
+        action("Undo") { canvas.engine.undo(); canvas.invalidate() }
+        action("Clear") { canvas.engine.clearAll(); canvas.invalidate() }
+        paperChip = action("Paper") { canvas.paper = !canvas.paper; refresh() }
+        fingerChip = action("Finger") { canvas.fingerWrites = !canvas.fingerWrites; refresh() }
+        padCard2.addView(ar)
+
+        padCard2.addView(canvas, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(380)).also { it.topMargin = dp(8) })
+        padCard2.addView(
+            text(
+                "Pen writes, finger erases whole strokes (tap \"Finger\" to let the finger write). " +
+                    "The smart pen buttons work here too when the writing pad is off.",
+                12f, textDim,
+            ).also { pad(it, 0, 8, 0, 0) },
+        )
+        root.addView(padCard2)
+
+        // ---- floating bubble ----
+        val bubCard = card()
+        bubCard.addView(heading("Floating bubble"))
+        bubbleSwitch = Switch(this).apply {
+            text = "Show the tiny bubble"
+            setTextColor(textMain)
+            textSize = 14f
+        }
+        bubbleSwitch.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+            if (!binding) prefs.edit().putBoolean(Prefs.BUBBLE_ON, on).apply()
+        }
+        bubCard.addView(bubbleSwitch)
+        bubbleLabel = text("", 13f, textDim).also { pad(it, 0, 10, 0, 0) }
+        bubCard.addView(bubbleLabel)
+        bubbleBar = SeekBar(this).apply { max = 59 }
+        bubbleBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                bubbleLabel.text = "Bubble visibility: " + (1 + p) + " %" + (if (p == 4) "  (default)" else "")
+                if (fromUser && !binding) prefs.edit().putInt(Prefs.BUBBLE_ALPHA, 1 + p).apply()
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+        bubCard.addView(bubbleBar)
+        bubCard.addView(
+            text(
+                "Tap the bubble with a finger for the quick menu: switch pen, erase / lasso, colour, size, undo, " +
+                    "erase the whole screen, pen layer on/off. Drag it to move it. At 5% it is almost invisible - " +
+                    "raise the visibility if you cannot find it (it also glows for a moment whenever the service starts).",
+                12f, textDim,
+            ).also { pad(it, 0, 8, 0, 0) },
+        )
+        root.addView(bubCard)
 
         // ---- advanced ----
         val advCard = card()
         advCard.addView(heading("Advanced"))
+        tapSwitch = Switch(this).apply {
+            text = "A quick pen tap (no writing) clicks the app below"
+            setTextColor(textMain)
+            textSize = 14f
+        }
+        tapSwitch.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+            if (!binding) prefs.edit().putBoolean(Prefs.PEN_TAP_CLICK, on).apply()
+        }
+        advCard.addView(tapSwitch)
+        advCard.addView(
+            text("Turn this off if you want dots (i, full stop) with a quick tap of the pen.", 12f, textDim).also { pad(it, 0, 2, 0, 8) },
+        )
         windowSwitch = Switch(this).apply {
             text = "Window mode (fallback)"
             setTextColor(textMain)
@@ -202,19 +369,51 @@ class MainActivity : Activity() {
         val window = if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
         windowSwitch.isChecked = window
         screenOffSwitch.isChecked = prefs.getBoolean(Prefs.OFF_ON_SCREEN_OFF, true)
+        tapSwitch.isChecked = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
+        bubbleSwitch.isChecked = prefs.getBoolean(Prefs.BUBBLE_ON, true)
         modeInfo.text = if (window) "Mode: window (pen writes, finger taps are replayed)" else "Mode: pen capture (fingers are never touched)"
-        val blue = prefs.getInt(Prefs.COLOR, Prefs.RED) == Prefs.BLUE
-        styleChip(colorRed, !blue, Prefs.RED)
-        styleChip(colorBlue, blue, Prefs.BLUE)
+
+        val pt = prefs.getInt(Prefs.PEN_TYPE, Pen.NIRMAL).coerceIn(0, 3)
+        for (i in penChips.indices) selChip(penChips[i], i == pt)
+        for (i in toolChips.indices) selChip(toolChips[i], i == canvas.tool)
+        paperChip.text = if (canvas.paper) "Paper" else "Black"
+        fingerChip.text = if (canvas.fingerWrites) "Finger: writes" else "Finger: erases"
+
+        val size = Prefs.size(prefs)
+        sizeBar.progress = ((size - 1f) / 0.5f).toInt().coerceIn(0, 58)
+        sizeLabel.text = "Size: " + String.format("%.1f", size) + " dp"
+        val op = Prefs.opacity(prefs)
+        opBar.progress = (op - 10).coerceIn(0, 90)
+        opLabel.text = "Ink opacity: $op %"
+        val ba = Prefs.bubbleAlpha(prefs)
+        bubbleBar.progress = (ba - 1).coerceIn(0, 59)
+        bubbleLabel.text = "Bubble visibility: $ba %" + (if (ba == 5) "  (default)" else "")
+
+        val cur = prefs.getInt(Prefs.COLOR, Prefs.RED)
+        val pal = Prefs.PALETTE
+        for (i in swatches.indices) {
+            val c = pal[i]
+            swatches[i].background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(c)
+                setStroke(if (c == cur) dp(4) else dp(1), if (c == cur) Color.WHITE else Color.parseColor("#55FFFFFF"))
+            }
+        }
         binding = false
         setStatus(a11yStatus, a11yEnabled())
         setStatus(notifStatus, notifGranted())
     }
 
-    /** Pen test: tool type, source, device and buttons, plus the last key (pen side buttons). */
+    /** Pen test + in-app smart pen buttons (when the writing pad is off the service does not consume them). */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && ::probe.isInitialized) {
             probe.setKey(KeyEvent.keyCodeToString(event.keyCode) + " (" + (event.device?.name ?: "?") + ")")
+        }
+        if (::canvas.isInitialized && (event.keyCode == KeyEvent.KEYCODE_PAGE_UP || event.keyCode == KeyEvent.KEYCODE_PAGE_DOWN)) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (event.keyCode == KeyEvent.KEYCODE_PAGE_DOWN) keys.pageDown() else keys.pageUp()
+            }
+            return true
         }
         return super.dispatchKeyEvent(event)
     }
@@ -253,6 +452,17 @@ class MainActivity : Activity() {
     // ====================================================================================
     //  small view helpers
     // ====================================================================================
+
+    private fun rounded(color: Int, r: Int): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(r).toFloat()
+        }
+
+    private fun selChip(v: TextView, selected: Boolean) {
+        v.background = rounded(if (selected) accent else chipOff, 12)
+        v.setTextColor(if (selected) Color.parseColor("#1A1A1A") else Color.WHITE)
+    }
 
     private fun card(): LinearLayout {
         val l = LinearLayout(this).apply {

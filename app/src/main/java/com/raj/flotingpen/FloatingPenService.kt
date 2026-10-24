@@ -2,6 +2,7 @@ package com.raj.flotingpen
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -26,6 +27,11 @@ class FloatingPenService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        controller?.onConfigChanged()
+    }
 
     override fun onInterrupt() {}
 
