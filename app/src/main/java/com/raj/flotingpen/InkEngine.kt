@@ -44,17 +44,6 @@ interface InkEvents {
     fun onLassoResult(count: Int)
 }
 
-/** Per-pen smoothing profile, ported 1:1 from the HTML reference (PEN_PROFILES). Sizes are in dp. */
-class PenProfile(
-    val stab: Float, val rMul: Float, val rMin: Float, val rMax: Float,
-    val taperN: Int, val taperFloor: Float,
-    val pBase: Float, val pMul: Float,
-    val spFloor: Float, val spCeil: Float,
-    val wSmooth: Float,
-    val endN: Int, val endFloor: Float,
-    val baseScale: Float, val grain: Boolean,
-)
-
 private val P_NIRMAL = PenProfile(0.62f, 1.3f, 4f, 12f, 2, 0.55f, 0.62f, 0.65f, 0.8f, 1.0f, 0.4f, 5, 0.22f, 1f, false)
 private val P_CLASSIC = PenProfile(0.45f, 2.2f, 7f, 26f, 5, 0.35f, 0.45f, 1.0f, 0.55f, 1.05f, 0.28f, 0, 1f, 1f, false)
 private val P_PENCIL = PenProfile(0.64f, 0.9f, 2.5f, 6.5f, 3, 0.42f, 0.58f, 0.48f, 0.78f, 1.0f, 0.44f, 4, 0.28f, 0.7f, true)
@@ -70,30 +59,6 @@ class Grain(
 )
 
 class Pt(@JvmField var x: Float, @JvmField var y: Float, @JvmField var w: Float, @JvmField val g: Grain?)
-
-class Stroke(
-    @JvmField val type: Int,
-    @JvmField val color: Int,
-    @JvmField val opacity: Float,
-    @JvmField val baseW: Float,
-) {
-    @JvmField val pts = ArrayList<Pt>(64)
-    @JvmField var l = Float.MAX_VALUE
-    @JvmField var t = Float.MAX_VALUE
-    @JvmField var r = -Float.MAX_VALUE
-    @JvmField var b = -Float.MAX_VALUE
-    @JvmField var path: Path? = null   // annotation strokes only
-    @JvmField var alpha = 1f
-    @JvmField var fadeAt = 0L
-
-    fun add(p: Pt) {
-        pts.add(p)
-        if (p.x < l) l = p.x
-        if (p.x > r) r = p.x
-        if (p.y < t) t = p.y
-        if (p.y > b) b = p.y
-    }
-}
 
 /**
  * The drawing brain. Strokes are kept as vectors, so they can be erased stroke-by-stroke, lassoed and undone.

@@ -1,54 +1,27 @@
 package com.raj.flotingpen
 
-/**
- * One pen stroke. Points are stored in a single packed FloatArray (x, y, width) instead of one
- * object per point, which keeps RAM use and GC pressure very low. Coordinates are world
- * coordinates (screen position minus the current canvas pan).
- */
+import android.graphics.Path
+
 class Stroke(
-    val color: Int,
-    val penType: Int,
-    val annot: Boolean,
-    val seed: Int,
+    @JvmField val type: Int,
+    @JvmField val color: Int,
+    @JvmField val opacity: Float,
+    @JvmField val baseW: Float,
 ) {
-    var pts = FloatArray(90)
-    var n = 0
-    /** Offset added to the point index when generating pencil grain, so grain stays stable after an erase split. */
-    var idxBase = 0
-    var endedAt = 0L
+    @JvmField val pts = ArrayList<Pt>(64)
+    @JvmField var l = Float.MAX_VALUE
+    @JvmField var t = Float.MAX_VALUE
+    @JvmField var r = -Float.MAX_VALUE
+    @JvmField var b = -Float.MAX_VALUE
+    @JvmField var path: Path? = null   // annotation strokes only
+    @JvmField var alpha = 1f
+    @JvmField var fadeAt = 0L
 
-    var minX = Float.MAX_VALUE
-    var minY = Float.MAX_VALUE
-    var maxX = -Float.MAX_VALUE
-    var maxY = -Float.MAX_VALUE
-    var maxW = 0f
-
-    fun add(x: Float, y: Float, w: Float) {
-        val k = n * 3
-        if (k + 3 > pts.size) pts = pts.copyOf(pts.size * 2)
-        pts[k] = x
-        pts[k + 1] = y
-        pts[k + 2] = w
-        n++
-        if (x < minX) minX = x
-        if (y < minY) minY = y
-        if (x > maxX) maxX = x
-        if (y > maxY) maxY = y
-        if (w > maxW) maxW = w
+    fun add(p: Pt) {
+        pts.add(p)
+        if (p.x < l) l = p.x
+        if (p.x > r) r = p.x
+        if (p.y < t) t = p.y
+        if (p.y > b) b = p.y
     }
-
-    fun x(i: Int): Float = pts[i * 3]
-    fun y(i: Int): Float = pts[i * 3 + 1]
-    fun w(i: Int): Float = pts[i * 3 + 2]
-    fun setW(i: Int, v: Float) {
-        pts[i * 3 + 2] = v
-    }
-
-    /** Release unused capacity once the stroke is finished. */
-    fun trim() {
-        if (pts.size > n * 3 && n > 0) pts = pts.copyOf(n * 3)
-    }
-
-    /** Bounds padding: half the widest point plus room for pencil grain. */
-    fun pad(): Float = maxW * 0.5f + 6f
 }
