@@ -56,16 +56,28 @@ class MainActivity : Activity() {
     private val swatches = ArrayList<View>()
     private var binding = false
 
-    private val keys = ToolKeys(
-        { if (::canvas.isInitialized) canvas.tool else Pen.TOOL_WRITE },
-        { t ->
-            if (::canvas.isInitialized) {
-                canvas.tool = t
-                refresh()
-            }
-        },
-        { if (::canvas.isInitialized) canvas.engine.clearAll() },
-    )
+    private val keys by lazy {
+        PenButtons(
+            this,
+            { if (::canvas.isInitialized) canvas.tool else Pen.TOOL_WRITE },
+            { t ->
+                if (::canvas.isInitialized) {
+                    canvas.tool = t
+                    refresh()
+                }
+            },
+            { if (::canvas.isInitialized) canvas.engine.clearAll() },
+            {
+                if (::canvas.isInitialized) {
+                    canvas.engine.undo()
+                    canvas.invalidate()
+                }
+            },
+            { },
+        )
+    }
+
+    private lateinit var controls: ControlsUi
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (::canvas.isInitialized) refresh() }
@@ -139,11 +151,9 @@ class MainActivity : Activity() {
         padCard.addView(modeInfo)
         padCard.addView(
             text(
-                "Smart pen buttons (pad on):\n" +
-                    "• Down button: erase mode (touch a stroke to erase it) - press again to write\n" +
-                    "• Up button: 1 press = lasso (circle strokes to erase) - 2 quick presses = clear screen\n" +
-                    "• Down button from lasso = back to writing at once\n" +
-                    "• Hold the pen nib still for 4 seconds = red / blue\n" +
+                "Smart pen buttons (pad on): choose what the Up / Down buttons (1 tap or 2 taps) and a held nib do in " +
+                    "\"Smart pen buttons & gestures\" below. Default: Down = erase mode, Up = lasso, Up twice = clear screen, " +
+                    "nib held 3 s = red / blue.\n" +
                     "• Quick pen tap without writing = click in the app below\n" +
                     "Also: Quick Settings tile, notification buttons, and the tiny floating bubble.",
                 12f, textDim,
@@ -202,7 +212,7 @@ class MainActivity : Activity() {
         })
         penCard.addView(opBar)
 
-        penCard.addView(text("Colour (hold the nib still 4 s to flip red / blue)", 13f, textDim).also { pad(it, 0, 12, 0, 6) })
+        penCard.addView(text("Colour", 13f, textDim).also { pad(it, 0, 12, 0, 6) })
         val colorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         swatches.clear()
         for (c in Prefs.PALETTE) {
@@ -258,6 +268,10 @@ class MainActivity : Activity() {
             ).also { pad(it, 0, 8, 0, 0) },
         )
         root.addView(padCard2)
+
+        // ---- smart pen buttons, custom actions, presets ----
+        controls = ControlsUi(this)
+        root.addView(controls.view)
 
         // ---- floating bubble ----
         val bubCard = card()
@@ -400,6 +414,7 @@ class MainActivity : Activity() {
             }
         }
         binding = false
+        if (::controls.isInitialized) controls.refresh()
         setStatus(a11yStatus, a11yEnabled())
         setStatus(notifStatus, notifGranted())
     }
@@ -416,6 +431,12 @@ class MainActivity : Activity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (::controls.isInitialized && controls.onResult(requestCode, resultCode, data)) return
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     // ====================================================================================

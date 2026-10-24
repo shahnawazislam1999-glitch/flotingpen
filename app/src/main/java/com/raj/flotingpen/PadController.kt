@@ -50,7 +50,7 @@ class PadController(private val service: FloatingPenService) {
 
     val inkConfig = PrefsInkConfig(service)
     private var tool = Pen.TOOL_WRITE
-    private val keys = ToolKeys({ tool }, { setTool(it) }, { clearInk() })
+    private val keys = PenButtons(service, { tool }, { setTool(it) }, { clearInk() }, { undo() }, { vibrate(it) })
     private val bubble = FloatingBubble(service, this)
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -204,12 +204,13 @@ class PadController(private val service: FloatingPenService) {
         bubble.refreshMenu()
     }
 
-    /** Red <-> blue (nib held still for 4 seconds). */
-    fun toggleColor() {
-        val next = if (inkConfig.color() == Prefs.BLUE) Prefs.RED else Prefs.BLUE
-        prefs.edit().putInt(Prefs.COLOR, next).apply()
-        vibrate(40)
-        view?.flash(if (next == Prefs.BLUE) "Blue pen" else "Red pen", 1200L)
+    /** Nib held still: how long, whether it is used at all, and what it does (all set in the app). */
+    fun holdMs(): Long = Prefs.holdSec(prefs) * 1000L
+
+    fun holdEnabled(): Boolean = Prefs.action(prefs, Prefs.HOLD_ACTION) != Act.NONE
+
+    fun holdAction() {
+        keys.runHold()
     }
 
     fun setPad(on: Boolean) {
@@ -255,7 +256,7 @@ class PadController(private val service: FloatingPenService) {
 
     /**
      * Xiaomi smart pen side buttons arrive as Page Up / Page Down keys.
-     *  Down: writing <-> stroke eraser.  Up: 1 press = lasso, 2 quick presses = clear the screen.
+     * What each button does (1 tap / 2 taps) is chosen in the app.
      */
     fun onKey(e: KeyEvent): Boolean {
         if (view == null || !padOn()) return false

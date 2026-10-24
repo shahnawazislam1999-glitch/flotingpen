@@ -22,6 +22,18 @@ object Prefs {
     const val BUBBLE_X = "bubble_x"
     const val BUBBLE_Y = "bubble_y"
 
+    // smart pen buttons / gestures: each holds an action id (see Act)
+    const val BTN_UP_1 = "btn_up_1"                    // up button, 1 tap   (default: lasso)
+    const val BTN_UP_2 = "btn_up_2"                    // up button, 2 taps  (default: clear screen)
+    const val BTN_DOWN_1 = "btn_down_1"                // down button, 1 tap (default: stroke eraser)
+    const val BTN_DOWN_2 = "btn_down_2"                // down button, 2 taps (default: nothing)
+    const val HOLD_ACTION = "hold_action"              // nib held still      (default: red <-> blue)
+    const val HOLD_SEC = "hold_sec"                    // seconds to hold, 1..10 (default 3)
+    const val DOUBLE_MS = "double_ms"                  // 2-tap window in ms, 250..900 (default 500)
+    const val CUSTOM_ACTIONS = "custom_actions"        // JSON list of user-made actions
+    const val PRESETS = "presets_json"                 // JSON map name -> saved settings
+    const val PREV_PEN = "prev_pen"                    // pen used before the last pen switch
+
     val RED: Int = 0xFFD92B2B.toInt()
     val BLUE: Int = 0xFF2D6EE0.toInt()
     val BLACK: Int = 0xFF1A1A1A.toInt()
@@ -55,6 +67,20 @@ object Prefs {
     }
 
     fun bubbleAlpha(p: SharedPreferences): Int = p.getInt(BUBBLE_ALPHA, 5).coerceIn(1, 60)
+
+    fun defaultAction(key: String): String = when (key) {
+        BTN_UP_1 -> Act.LASSO
+        BTN_UP_2 -> Act.CLEAR
+        BTN_DOWN_1 -> Act.ERASER
+        HOLD_ACTION -> Act.COLOR_RB
+        else -> Act.NONE
+    }
+
+    fun action(p: SharedPreferences, key: String): String = p.getString(key, null) ?: defaultAction(key)
+
+    fun holdSec(p: SharedPreferences): Int = p.getInt(HOLD_SEC, 3).coerceIn(1, 10)
+
+    fun doubleMs(p: SharedPreferences): Int = p.getInt(DOUBLE_MS, 500).coerceIn(250, 900)
 }
 
 /** Live view of the pen settings for the ink engine (overlay and in-app pad share it). */

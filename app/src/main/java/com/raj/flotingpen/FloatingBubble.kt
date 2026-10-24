@@ -340,7 +340,7 @@ class FloatingBubble(private val service: FloatingPenService, private val ctrl: 
         }
 
         // ---- colour ----
-        panel.addView(caption("COLOUR  (hold the nib still 4 s = red / blue)"))
+        panel.addView(caption("COLOUR"))
         val swatches = ArrayList<View>()
         for (c in Prefs.PALETTE) {
             val v = View(service)

@@ -792,39 +792,3 @@ class InkEngine(
         private const val TWO_PI = 6.2831855f
     }
 }
-
-/**
- * Smart pen side buttons -> tools. Shared by the overlay and the in-app pad.
- *  Down button: writing <-> stroke eraser (from lasso it goes straight back to writing).
- *  Up button:   1 press = lasso, 2 quick presses = clear the screen and write again.
- */
-class ToolKeys(
-    private val getTool: () -> Int,
-    private val setTool: (Int) -> Unit,
-    private val clear: () -> Unit,
-) {
-    private var lastUpAt = 0L
-    private var upCount = 0
-
-    fun pageDown() {
-        upCount = 0
-        setTool(if (getTool() == Pen.TOOL_WRITE) Pen.TOOL_ERASE else Pen.TOOL_WRITE)
-    }
-
-    fun pageUp() {
-        val now = SystemClock.uptimeMillis()
-        if (upCount == 1 && now - lastUpAt <= DOUBLE_MS) {
-            upCount = 0
-            clear()
-            setTool(Pen.TOOL_WRITE)
-            return
-        }
-        upCount = 1
-        lastUpAt = now
-        setTool(if (getTool() == Pen.TOOL_LASSO) Pen.TOOL_WRITE else Pen.TOOL_LASSO)
-    }
-
-    companion object {
-        const val DOUBLE_MS = 500L
-    }
-}

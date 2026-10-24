@@ -23,18 +23,22 @@ Nirmal Pen (smooth, no lag) - Classic Pen - Pencil (graphite grain) - Annotation
 Size, opacity and colour are shared by the home screen, the bubble menu and the overlay.
 The home screen has a practice pad that uses the same engine.
 
-## Smart pen buttons (writing pad on)
+## Smart pen buttons & gestures (set in the app)
 
-| Button | Action |
-|---|---|
-| Down | Writing -> **stroke eraser** (pen touching a stroke erases it). Press again -> writing |
-| Up, 1 press | **Lasso**: circle strokes, they are erased when you lift the pen |
-| Up, 2 quick presses | **Clear screen**, back to writing |
-| Down while in lasso | Back to writing at once |
-| Nib held still 4 s | Red <-> blue |
-| Quick pen tap, no writing | Clicks the app below (switch off in Advanced if you want dots) |
+Home screen > **Smart pen buttons & gestures**. Pick any action for: Up button 1 tap / 2 taps, Down button 1 tap / 2 taps,
+and the nib held still (hold time 1-10 s, default 3 s). The 1-tap action runs at once; if you press a button twice within
+the 2-tap speed, the pen is put back to how it was and the 2-tap action runs.
 
-A small ERASER / LASSO label shows at the top while those tools are active.
+Defaults: Down = stroke eraser, Up = lasso, Up x2 = clear screen, nib held 3 s = red / blue.
+
+Actions: write, stroke eraser, lasso, clear, undo, Nirmal / Classic / Pencil / Annotation pen (press again = back to the
+previous pen), next pen, colour red<->blue / next / red / blue / black, size and opacity up/down, show/hide bubble,
+pad off, Android Back / Home / Recents / Notifications / Quick settings / Screenshot, and your own custom actions.
+
+**Custom actions**: *Launch app* (any installed app) or *Macro* (up to 8 actions run one after another).
+
+**Presets & backup**: save the current settings as a named preset and load it later; export / import everything
+(settings, buttons, custom actions, presets) as a JSON file. Imported values are range-checked.
 
 ## Floating bubble
 

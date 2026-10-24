@@ -19,7 +19,7 @@ import kotlin.math.hypot
  *
  * Pen gestures:
  *  - write / stroke-erase / lasso depending on the tool chosen with the smart pen buttons or the bubble menu
- *  - hold the nib still for 4 seconds: red <-> blue
+ *  - hold the nib still (time and action chosen in the app)
  *  - a quick pen tap without writing clicks the app below (can be switched off)
  */
 class InkView(context: Context, private val ctrl: PadController) : View(context) {
@@ -44,7 +44,7 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
         if (gTool == Pen.TOOL_WRITE && !moved) {
             holdFired = true
             engine.abort()
-            ctrl.toggleColor()
+            ctrl.holdAction()
         }
     }
 
@@ -180,7 +180,7 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
         holdFired = false
         engine.begin(tool, x, y, p, t)
         removeCallbacks(holdRun)
-        if (tool == Pen.TOOL_WRITE) postDelayed(holdRun, HOLD_MS)
+        if (tool == Pen.TOOL_WRITE && ctrl.holdEnabled()) postDelayed(holdRun, ctrl.holdMs())
     }
 
     private fun gestureMove(x: Float, y: Float, p: Float, t: Long) {
@@ -371,7 +371,6 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
         private const val M_FINGER = 2
         private const val M_PALM = 3
         private const val PALM_MS = 350L
-        private const val HOLD_MS = 4000L
         private const val HOLD_SLOP_DP = 10f
         private const val TAP_MS = 260L
     }
