@@ -46,14 +46,16 @@ class PadController(private val service: AccessibilityService) {
         if (key == Prefs.PAD_ON) applyPad() else updateTouchable()
     }
 
-    private val expire: Runnable = Runnable {
-        expireScheduled = false
-        val remaining = sessionUntil - SystemClock.uptimeMillis()
-        if (remaining > 0L || view?.busy == true) {
-            expireScheduled = true
-            main.postDelayed(expire, max(remaining, 400L) + 30L)
-        } else {
-            updateTouchable()
+    private val expire = object : Runnable {
+        override fun run() {
+            expireScheduled = false
+            val remaining = sessionUntil - SystemClock.uptimeMillis()
+            if (remaining > 0L || view?.busy == true) {
+                expireScheduled = true
+                main.postDelayed(this, max(remaining, 400L) + 30L)
+            } else {
+                updateTouchable()
+            }
         }
     }
 
