@@ -23,9 +23,10 @@ object Prefs {
     const val OPACITY = "opacity"                      // ink opacity percent 10..100
     const val WINDOW_MODE = "window_mode"              // fallback: overlay catches touches, fingers are replayed
     const val OFF_ON_SCREEN_OFF = "off_on_screen_off"  // power button switches the pad off (default on)
-    const val PEN_TAP_CLICK = "pen_tap_click"          // a quick pen tap (no writing) clicks the app below
+    const val PEN_TAP_CLICK = "pen_tap_click_v3"       // a quick pen tap clicks the app below (default OFF: a tap draws a full stop)
     const val BUBBLE_ON = "bubble_on"                  // floating bubble visible (default on)
     const val BUBBLE_ALPHA = "bubble_alpha"            // bubble opacity percent 1..60 (default 5)
+    const val A11Y_WANTED = "a11y_wanted"              // pen service was switched on (so it is brought back if Android kills it)
     const val BUBBLE_X = "bubble_x"
     const val BUBBLE_Y = "bubble_y"
 

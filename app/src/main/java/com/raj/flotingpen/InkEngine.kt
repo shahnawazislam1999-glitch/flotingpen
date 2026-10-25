@@ -341,6 +341,11 @@ class InkEngine(
     private fun endWrite(x: Float, y: Float) {
         val s = cur ?: return
         val n = s.pts.size
+        // A tap with no movement is a full stop: make the dot full size (not the tiny start-taper size).
+        if (n == 1 && s.type != Pen.ANNOT) {
+            val p0 = s.pts[0]
+            if (hypot(x - p0.x, y - p0.y) < 3f * d && p0.w < s.baseW) p0.w = s.baseW
+        }
         if (n >= 1) {
             val last = s.pts[n - 1]
             // close the small gap between the smoothed line and the real pen position

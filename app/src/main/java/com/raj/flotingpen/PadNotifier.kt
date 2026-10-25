@@ -18,6 +18,7 @@ object PadNotifier {
     const val ACTION_CLEAR = "com.raj.flotingpen.action.PAD_CLEAR"
     const val ACTION_BUBBLE = "com.raj.flotingpen.action.BUBBLE_TOGGLE"
     const val ACTION_BOX = "com.raj.flotingpen.action.BOX_TOGGLE"
+    const val ACTION_FIX = "com.raj.flotingpen.action.FIX_PEN"
     private const val ID_TOOLS = 4108
     private const val CHANNEL = "pad_on"
     private const val ID = 4107
@@ -52,6 +53,7 @@ object PadNotifier {
                 .setShowWhen(false)
                 .setCategory(Notification.CATEGORY_SERVICE)
                 .addAction(Notification.Action.Builder(icon, if (bubbleOn) "Hide bubble" else "Show bubble", action(ctx, 4, ACTION_BUBBLE)).build())
+                .addAction(Notification.Action.Builder(icon, "Fix pen", action(ctx, 6, ACTION_FIX)).build())
                 .build()
             nm.notify(ID_TOOLS, tools)
             val n = Notification.Builder(ctx, CHANNEL)
@@ -72,7 +74,7 @@ object PadNotifier {
         }
     }
 
-    /** Switch the writing pad off (notification button, power button) and refresh the tile. */
+    /** Switch the writing pad off (notification button, tile, app switch) and refresh the tile. */
     fun turnOff(ctx: Context) {
         Prefs.get(ctx).edit().putBoolean(Prefs.PAD_ON, false).apply() // the service hides the pad
         cancel(ctx)
@@ -98,6 +100,7 @@ class PadActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             PadNotifier.ACTION_OFF -> PadNotifier.turnOff(context)
             PadNotifier.ACTION_CLEAR -> FloatingPenService.instance?.clearInk()
+            PadNotifier.ACTION_FIX -> FloatingPenService.instance?.healNow()
             PadNotifier.ACTION_BOX -> {
                 val sp = Prefs.get(context)
                 sp.edit().putBoolean(Prefs.WHITE_BOX, !sp.getBoolean(Prefs.WHITE_BOX, false)).apply()

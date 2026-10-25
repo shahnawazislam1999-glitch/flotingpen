@@ -29,7 +29,7 @@ object SettingsIO {
         o.put(Prefs.BUBBLE_ALPHA, Prefs.bubbleAlpha(p))
         o.put(Prefs.HOLD_SEC, Prefs.holdSec(p))
         o.put(Prefs.DOUBLE_MS, Prefs.doubleMs(p))
-        for (k in BOOL_KEYS) o.put(k, p.getBoolean(k, true))
+        for (k in BOOL_KEYS) o.put(k, p.getBoolean(k, k != Prefs.PEN_TAP_CLICK))
         for (k in ACTION_KEYS) o.put(k, Prefs.action(p, k))
         o.put(Prefs.CUSTOM_ACTIONS, CustomActions.toJson(CustomActions.load(p)))
         return o

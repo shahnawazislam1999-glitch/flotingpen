@@ -47,7 +47,8 @@ class PadController(private val service: FloatingPenService) {
     private var touchableNow = false
     private var replaying = false
     private var lastKeyAt = 0L
-    private var screenOffRegistered = false
+    private var screenOnRegistered = false
+    private var lastHealAt = 0L
 
     val inkConfig = PrefsInkConfig(service)
     private var tool = Pen.TOOL_WRITE
@@ -75,10 +76,22 @@ class PadController(private val service: FloatingPenService) {
         }
     }
 
-    /** Power button / screen off: switch the writing pad off (can be disabled in the app). */
-    private val screenOff = object : BroadcastReceiver() {
+    /**
+     * The power button no longer switches the pad off. The pad stays on until YOU turn it off.
+     * When the screen comes back on, the pen layer is checked and revived if the system dropped it.
+     */
+    private val screenOn = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (padOn() && prefs.getBoolean(Prefs.OFF_ON_SCREEN_OFF, true)) PadNotifier.turnOff(service)
+            heal(true)
+            main.postDelayed({ heal(true) }, 1200L)
+        }
+    }
+
+    /** Every 20 s while the pad is on: is the pen layer still attached and is pen capture still on? */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (padOn()) heal(false)
+            main.postDelayed(this, WATCHDOG_MS)
         }
     }
 
@@ -88,7 +101,7 @@ class PadController(private val service: FloatingPenService) {
     fun sizePx() = Prefs.size(prefs) * density
     fun tool(): Int = tool
     fun autoSwitch(): Boolean = Prefs.autoSwitch(prefs)
-    fun penTapClicks(): Boolean = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
+    fun penTapClicks(): Boolean = prefs.getBoolean(Prefs.PEN_TAP_CLICK, false)
     fun windowMode(): Boolean =
         if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
 
@@ -105,12 +118,45 @@ class PadController(private val service: FloatingPenService) {
     fun start() {
         prefs.registerOnSharedPreferenceChangeListener(prefListener)
         try {
-            service.registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
-            screenOffRegistered = true
+            val f = IntentFilter(Intent.ACTION_SCREEN_ON)
+            f.addAction(Intent.ACTION_USER_PRESENT)
+            service.registerReceiver(screenOn, f)
+            screenOnRegistered = true
         } catch (_: Throwable) {
         }
         applyPad()
         bubble.sync()
+        main.postDelayed(watchdog, WATCHDOG_MS)
+    }
+
+    /**
+     * Revives the pen layer. [force]: switch pen capture off and on again even if it looks fine.
+     * Never touches a stroke that is being written right now.
+     */
+    fun heal(force: Boolean) {
+        if (!padOn()) return
+        val v = view
+        if (v == null) {
+            if (force) show() // pad is on but there is no layer: build it
+            return
+        }
+        if (!v.isAttachedToWindow) {
+            // The overlay window is gone (system removed it): build it again.
+            hide()
+            show()
+            return
+        }
+        if (v.busy()) return
+        if (!windowMode() && (force || !service.penCaptureIsOn())) service.setPenCapture(true, true)
+        v.invalidate()
+    }
+
+    /** Cheap, rate-limited version for window changes and pen button presses. */
+    fun healSoon(force: Boolean = false) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastHealAt < 4000L) return
+        lastHealAt = now
+        main.post { heal(force) }
     }
 
     fun onConfigChanged() {
@@ -119,12 +165,12 @@ class PadController(private val service: FloatingPenService) {
 
     fun stop() {
         prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
-        if (screenOffRegistered) {
+        if (screenOnRegistered) {
             try {
-                service.unregisterReceiver(screenOff)
+                service.unregisterReceiver(screenOn)
             } catch (_: Throwable) {
             }
-            screenOffRegistered = false
+            screenOnRegistered = false
         }
         main.removeCallbacksAndMessages(null)
         bubble.remove()
@@ -318,6 +364,7 @@ class PadController(private val service: FloatingPenService) {
             val now = SystemClock.uptimeMillis()
             if (now - lastKeyAt >= 90L) {
                 lastKeyAt = now
+                healSoon(true) // pen button pressed = pen is in use: re-arm pen capture before the next stroke
                 if (c == KeyEvent.KEYCODE_PAGE_DOWN) keys.pageDown() else keys.pageUp()
             }
         }
@@ -373,6 +420,7 @@ class PadController(private val service: FloatingPenService) {
     }
 
     companion object {
+        private const val WATCHDOG_MS = 20_000L
         private const val BASE_FLAGS =
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or

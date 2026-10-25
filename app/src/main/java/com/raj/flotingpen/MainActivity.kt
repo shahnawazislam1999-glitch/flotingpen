@@ -35,13 +35,13 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var padSwitch: Switch
     private lateinit var windowSwitch: Switch
-    private lateinit var screenOffSwitch: Switch
     private lateinit var tapSwitch: Switch
     private lateinit var bubbleSwitch: Switch
     private lateinit var autoSwitch: Switch
     private lateinit var boxSwitch: Switch
     private lateinit var a11yStatus: TextView
     private lateinit var notifStatus: TextView
+    private lateinit var battStatus: TextView
     private lateinit var modeInfo: TextView
     private lateinit var probe: PenProbe
     private lateinit var canvas: InkCanvasView
@@ -104,6 +104,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        A11yGuard.ensure(this)
         prefs.registerOnSharedPreferenceChangeListener(prefListener)
         refresh()
     }
@@ -130,7 +131,7 @@ class MainActivity : Activity() {
         scroll.addView(root, FrameLayout.LayoutParams(maxW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
         setContentView(scroll)
 
-        root.addView(text("FloatingPen  v2", 26f, textMain, bold = true))
+        root.addView(text("FloatingPen  v3", 26f, textMain, bold = true))
         root.addView(text("The pen writes on the screen. Your fingers use the apps normally.", 14f, textDim).also { pad(it, 0, 2, 0, 14) })
 
         // ---- writing pad switch ----
@@ -366,15 +367,6 @@ class MainActivity : Activity() {
                 12f, textDim,
             ).also { pad(it, 0, 4, 0, 0) },
         )
-        screenOffSwitch = Switch(this).apply {
-            text = "Turn the pad off when the power button is pressed"
-            setTextColor(textMain)
-            textSize = 14f
-        }
-        screenOffSwitch.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
-            if (!binding) prefs.edit().putBoolean(Prefs.OFF_ON_SCREEN_OFF, on).apply()
-        }
-        advCard.addView(screenOffSwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(12) })
         root.addView(advCard)
 
         // ---- permissions ----
@@ -382,9 +374,15 @@ class MainActivity : Activity() {
         permCard.addView(heading("Permissions"))
         a11yStatus = permRow(permCard, "Accessibility service (draws the pen layer)") { openAccessibility() }
         notifStatus = permRow(permCard, "Notifications (Turn off button)") { requestNotifications() }
+        battStatus = permRow(permCard, "Battery: never put the app to sleep") { A11yGuard.requestBattery(this) }
+        permRow(permCard, "Battery saver > No restrictions (Xiaomi / HyperOS)") { A11yGuard.openXiaomiBattery(this) }.also { it.text = "OPEN"; it.setTextColor(accent) }
+        permRow(permCard, "Auto-start (start again after restart)") { A11yGuard.openAutoStart(this) }.also { it.text = "OPEN"; it.setTextColor(accent) }
+        permRow(permCard, "App info (also lock the app in Recents)") { A11yGuard.appInfo(this) }.also { it.text = "OPEN"; it.setTextColor(accent) }
         permCard.addView(
             text(
-                "If Android blocks the accessibility switch for a sideloaded app: App info > ⋮ > Allow restricted settings, then try again.",
+                "To stop Android killing the pen in the background: set Battery to ON, choose \"No restrictions\" and allow Auto-start. " +
+                    "The pad now stays on when you press the power button; it only turns off when YOU turn it off. " +
+                    "If Android blocks the accessibility switch for a sideloaded app: App info > ⋮ > Allow restricted settings, then try again.",
                 12f, textDim,
             ).also { pad(it, 0, 8, 0, 0) },
         )
@@ -411,8 +409,7 @@ class MainActivity : Activity() {
         padSwitch.isChecked = prefs.getBoolean(Prefs.PAD_ON, false)
         val window = if (prefs.contains(Prefs.WINDOW_MODE)) prefs.getBoolean(Prefs.WINDOW_MODE, false) else Prefs.windowDefault()
         windowSwitch.isChecked = window
-        screenOffSwitch.isChecked = prefs.getBoolean(Prefs.OFF_ON_SCREEN_OFF, true)
-        tapSwitch.isChecked = prefs.getBoolean(Prefs.PEN_TAP_CLICK, true)
+        tapSwitch.isChecked = prefs.getBoolean(Prefs.PEN_TAP_CLICK, false)
         bubbleSwitch.isChecked = prefs.getBoolean(Prefs.BUBBLE_ON, true)
         autoSwitch.isChecked = Prefs.autoSwitch(prefs)
         boxSwitch.isChecked = prefs.getBoolean(Prefs.WHITE_BOX, false)
@@ -447,7 +444,13 @@ class MainActivity : Activity() {
         binding = false
         if (::controls.isInitialized) controls.refresh()
         setStatus(a11yStatus, a11yEnabled())
+        if (FloatingPenService.instance == null && A11yGuard.enabledInSettings(this)) {
+            // Switched on in Settings but Android killed it: turning it off and on again fixes it.
+            a11yStatus.text = "STOPPED - tap, switch off & on"
+            a11yStatus.setTextColor(bad)
+        }
         setStatus(notifStatus, notifGranted())
+        setStatus(battStatus, A11yGuard.batteryUnrestricted(this))
     }
 
     /** Pen test + in-app smart pen buttons (when the writing pad is off the service does not consume them). */

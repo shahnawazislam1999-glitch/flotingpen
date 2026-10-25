@@ -1,4 +1,4 @@
-# FloatingPen v2
+# FloatingPen v3
 
 Native Kotlin Android app. The smart pen writes on top of every app; your fingers keep using the apps.
 Made for the Xiaomi Pad 6 + Xiaomi Smart Pen (2nd gen).
@@ -7,8 +7,8 @@ Made for the Xiaomi Pad 6 + Xiaomi Smart Pen (2nd gen).
 
 1. Create a GitHub repository and push this whole folder to its `main` branch.
 2. In the repo: **Settings > Actions > General > Workflow permissions > Read and write permissions** (the workflow itself already asks for `write-all`).
-3. **Actions** tab > *Build APK (v2)* (runs on every push, or press *Run workflow*). Download the artifact **FloatingPen-v2-apk**
-   (`FloatingPen-v2-debug.apk`). Push a tag like `v2` to also get a GitHub Release with the APK attached.
+3. **Actions** tab > *Build APK (v3)* (runs on every push, or press *Run workflow*). Download the artifact **FloatingPen-v3-apk**
+   (`FloatingPen-v3-debug.apk`). Push a tag like `v2` to also get a GitHub Release with the APK attached.
 
 ## First run
 
@@ -62,3 +62,21 @@ opacity, undo, **Erase screen** (one tap), pen layer on/off. Drag it to move. Ch
 - **Auto switch back to pen** (Advanced, on by default): after one erase or one lasso the pen returns by itself.
 - **Separate Annotation Pen size**: Nirmal / Classic / Pencil share one size, the Annotation Pen keeps its own. Changing one never changes the other (app slider, bubble +/-, pen-button size actions all act on the pen in use).
 - **White box**: toggle in the notification panel (or Advanced in the app). A white rectangle appears under the ink - drag with a finger to move, drag the corner grip to resize; write on it with the pen.
+
+## v3 changes
+
+- **Stays alive in the background**: a tiny silent "FloatingPen is running" notification (foreground keep-alive), the service is
+  flagged as an accessibility tool, and a watchdog restarts the pen layer if Android drops it. In the app > Permissions:
+  set **Battery** (never sleep), **Battery saver > No restrictions** (Xiaomi / HyperOS), **Auto-start**, and lock the app in Recents.
+- **Pen buttons worked but nothing drew / erased on screen (needed a phone restart)**: fixed. Pen capture is now re-armed when
+  the screen turns on, when you change app, when you press a pen button and every 20 s; the overlay is rebuilt if the system
+  removed it. If it ever happens again press **Fix pen** in the notification panel (no restart needed).
+- **Power button no longer turns the pad off.** It only turns off when you turn it off (app switch, tile, notification).
+- Optional, one time, from a PC: `adb shell pm grant com.raj.flotingpen android.permission.WRITE_SECURE_SETTINGS`
+  lets the app switch its own accessibility service back on after Android kills it or after a restart.
+- GitHub workflow builds `FloatingPen-v3-*.apk` with `permissions: write-all`.
+
+## v3.0.1
+
+- A quick pen tap now draws a full-size dot (full stop). Before, a fast tap was sent to the app underneath as a click, so the dot only
+  appeared when the tap was a bit slower. "Pen tap clicks the app" is now OFF by default (switch is in the app, Advanced).

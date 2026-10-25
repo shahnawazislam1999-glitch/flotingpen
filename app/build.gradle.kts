@@ -11,8 +11,8 @@ android {
         applicationId = "com.raj.flotingpen"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "2.2.0"
+        versionCode = 6
+        versionName = "3.0.1"
     }
 
     buildTypes {

@@ -1,4 +1,4 @@
-name: Build APK (v2)
+name: Build APK (v3)
 
 on:
   push:
@@ -9,6 +9,7 @@ on:
 
 # Full write access for the workflow token (artifacts, releases, checks).
 permissions: write-all
+# (contents / actions / packages / checks / pull-requests / id-token: all write)
 
 jobs:
   build:
@@ -39,19 +40,19 @@ jobs:
         continue-on-error: true
         run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Name the APKs v2
+      - name: Name the APKs v3
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/*.apk out/FloatingPen-v2-debug.apk
+          cp app/build/outputs/apk/debug/*.apk out/FloatingPen-v3-debug.apk
           if ls app/build/outputs/apk/release/*.apk >/dev/null 2>&1; then
-            cp app/build/outputs/apk/release/*.apk out/FloatingPen-v2-release.apk
+            cp app/build/outputs/apk/release/*.apk out/FloatingPen-v3-release.apk
           fi
           ls -la out
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: FloatingPen-v2-apk
+          name: FloatingPen-v3-apk
           path: out/*.apk
 
       - name: Publish GitHub release (tags only)

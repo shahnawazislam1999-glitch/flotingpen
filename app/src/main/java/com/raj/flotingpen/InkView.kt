@@ -90,6 +90,9 @@ class InkView(context: Context, private val ctrl: PadController) : View(context)
         }
     }
 
+    /** True while a stroke / erase / lasso is being made (the layer must not be touched then). */
+    fun busy(): Boolean = gTool >= 0
+
     fun release() {
         removeCallbacks(holdRun)
         gTool = -1

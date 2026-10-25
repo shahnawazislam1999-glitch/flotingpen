@@ -6,6 +6,7 @@
     android:canPerformGestures="true"
     android:canRequestFilterKeyEvents="true"
     android:canRetrieveWindowContent="false"
+    android:isAccessibilityTool="true"
     android:description="@string/a11y_description"
     android:notificationTimeout="100"
     android:settingsActivity="com.raj.flotingpen.MainActivity" />
